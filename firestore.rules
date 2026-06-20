@@ -1,0 +1,33 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Funkcja sprawdzająca, czy użytkownik założył konto i jest zalogowany
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    // 1. Zabezpieczenie kolekcji użytkowników (logowanie / rejestracja)
+    match /users/{userId} {
+      // Użytkownik może czytać i edytować tylko własny profil uzytkownika
+      allow read, write: if isAuthenticated() && request.auth.uid == userId;
+    }
+
+    // 2. Zabezpieczenie udostępnionych arkuszy inwentaryzacyjnych
+    match /sheets/{sheetId} {
+      // Tylko zalogowani użytkownicy aplikacji mogą otwierać i modyfikować pliki
+      allow read, write: if isAuthenticated();
+      
+      // I to samo tyczy się zeskanowanych przedmiotów i części plików wewnątrz danego arkusza
+      match /{subcollection=**} {
+        allow read, write: if isAuthenticated();
+      }
+    }
+
+    // 3. Zabezpieczenie globalnych ustawień (np. PIN zapisywany w chmurze)
+    match /settings/{document=**} {
+      // Tylko zalogowani użytkownicy mogą odczytywać i zapisywać ustawienia Globalne
+      allow read, write: if isAuthenticated();
+    }
+  }
+}

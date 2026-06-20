@@ -1,0 +1,10 @@
+{
+  "name": "Mobilny Skaner Inwentaryzacyjny",
+  "description": "Mobilna aplikacja inwentaryzacyjna ze skanerem kodów, pozwalająca na import danych z Excela, weryfikację lokalizacji, partii i ilości oraz eksport wyników",
+  "requestFramePermissions": [
+    "camera"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
