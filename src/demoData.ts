@@ -14,6 +14,8 @@ export const DEFAULT_CONFIG: InventoryConfig = {
   pokazujInnaLok: true,
   pozwalajDodawac: true,
   motyw: "dark",
+  wibracje: true,
+  dzwieki: true,
 };
 
 export const DEMO_INVENTORY: InventoryItem[] = [

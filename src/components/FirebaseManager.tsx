@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useContext, useRef } from 'react';
 import { db } from '../firebase';
-import { collection, doc, setDoc, getDocs, updateDoc, writeBatch, query, where, getDoc, deleteDoc, onSnapshot } from 'firebase/firestore';
+import { collection, doc, setDoc, getDocs, updateDoc, writeBatch, query, where, getDoc, deleteDoc, onSnapshot, addDoc, Timestamp } from 'firebase/firestore';
 import { InventoryItem } from '../types';
 import { UserContext } from '../App';
 import { Cloud, UploadCloud, Play, Plus, Server, FileSpreadsheet } from 'lucide-react';
@@ -9,7 +9,7 @@ import { parseExcelFile, exportToExcel, exportToOriginalExcel } from '../utils/e
 
 interface FirebaseManagerProps {
   items: InventoryItem[];
-  onImport: (items: InventoryItem[], round?: string) => void;
+  onImport: (items: InventoryItem[], round?: string, sheetName?: string) => void;
   isLight: boolean;
 }
 
@@ -138,63 +138,80 @@ export default function FirebaseManager({ items, onImport, isLight }: FirebaseMa
     });
   };
 
-  const uploadFileDirectlyToCloud = async (file: File) => {
+  const uploadFileDirectlyToCloud = async (files: FileList | File[]) => {
     try {
       setIsUploading(true);
       setUploadError(null);
-      const parsedItems = await parseExcelFile(file);
-      if (parsedItems.length === 0) {
-          setUploadError('Arkusz jest pusty.');
-          setIsUploading(false);
-          return;
-      }
-      
-      const sheetName = file.name.replace(/\.[^/.]+$/, ""); // remove extension
-      const base64File = await fileToBase64(file);
+      let successCount = 0;
+      let errorMsgs: string[] = [];
 
-      const sheetRef = doc(collection(db, 'sheets'));
-      const hasChunks = base64File.length > 800000;
-      await setDoc(sheetRef, {
-        name: sheetName,
-        status: 'available',
-        currentRound: '1',
-        assignedTo: null,
-        createdBy: user?.uid,
-        createdAt: new Date().toISOString(),
-        hasChunks: hasChunks,
-        originalFileBase64: hasChunks ? null : base64File
-      });
-      
-      if (hasChunks) {
-        const CHUNK_LEN = 800000;
-        const chunksCount = Math.ceil(base64File.length / CHUNK_LEN);
-        const chunkBatch = writeBatch(db);
-        for (let i = 0; i < chunksCount; i++) {
-          const strChunk = base64File.substring(i * CHUNK_LEN, (i + 1) * CHUNK_LEN);
-          const chunkRef = doc(collection(db, `sheets/${sheetRef.id}/chunks`), `chunk_${i}`);
-          chunkBatch.set(chunkRef, { data: strChunk, index: i });
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        try {
+          const parsedItems = await parseExcelFile(file);
+          if (parsedItems.length === 0) {
+              errorMsgs.push(`Arkusz ${file.name} jest pusty.`);
+              continue;
+          }
+          
+          const sheetName = file.name.replace(/\.[^/.]+$/, ""); // remove extension
+          const base64File = await fileToBase64(file);
+
+          const sheetRef = doc(collection(db, 'sheets'));
+          const hasChunks = base64File.length > 800000;
+          await setDoc(sheetRef, {
+            name: sheetName,
+            status: 'available',
+            currentRound: '1',
+            assignedTo: null,
+            createdBy: user?.uid,
+            createdAt: new Date().toISOString(),
+            hasChunks: hasChunks,
+            originalFileBase64: hasChunks ? null : base64File
+          });
+          
+          if (hasChunks) {
+            const CHUNK_LEN = 800000;
+            const chunksCount = Math.ceil(base64File.length / CHUNK_LEN);
+            const chunkBatch = writeBatch(db);
+            for (let j = 0; j < chunksCount; j++) {
+              const strChunk = base64File.substring(j * CHUNK_LEN, (j + 1) * CHUNK_LEN);
+              const chunkRef = doc(collection(db, `sheets/${sheetRef.id}/chunks`), `chunk_${j}`);
+              chunkBatch.set(chunkRef, { data: strChunk, index: j });
+            }
+            await chunkBatch.commit();
+          }
+          
+          // Chunk array into batches of 450
+          const CHUNK_SIZE = 450;
+          for (let j = 0; j < parsedItems.length; j += CHUNK_SIZE) {
+            const chunk = parsedItems.slice(j, j + CHUNK_SIZE);
+            const batch = writeBatch(db);
+            chunk.forEach((item, index) => {
+              const itemRef = doc(collection(db, `sheets/${sheetRef.id}/items`), `item_${j + index}`);
+              batch.set(itemRef, item);
+            });
+            await batch.commit();
+          }
+          successCount++;
+        } catch (e: any) {
+          errorMsgs.push(`Błąd (${file.name}): ${e.message || e}`);
+          console.error(e);
         }
-        await chunkBatch.commit();
       }
-      
-      // Chunk array into batches of 450
-      const CHUNK_SIZE = 450;
-      for (let i = 0; i < parsedItems.length; i += CHUNK_SIZE) {
-        const chunk = parsedItems.slice(i, i + CHUNK_SIZE);
-        const batch = writeBatch(db);
-        chunk.forEach((item, index) => {
-          const itemRef = doc(collection(db, `sheets/${sheetRef.id}/items`), `item_${i + index}`);
-          batch.set(itemRef, item);
-        });
-        await batch.commit();
+
+      if (successCount > 0) {
+        showToast(`Pomyślnie wgrano ${successCount} arkusz(y) do chmury!`, 'success');
       }
-      
-      showToast(`Pomyślnie wgrano arkusz "${sheetName}" (${parsedItems.length} pozycji) do chmury!`, 'success');
+      if (errorMsgs.length > 0) {
+        setUploadError("Błędy wgrania:\n" + errorMsgs.join('\n'));
+      }
     } catch (e: any) {
-      setUploadError("Błąd podczas wgrywania pliku: " + e);
+      setUploadError("Błąd podczas wgrywania: " + e);
       console.error(e);
     } finally {
       setIsUploading(false);
+      if (fileInputRef.current) fileInputRef.current.value = '';
     }
   };
 
@@ -290,7 +307,7 @@ export default function FirebaseManager({ items, onImport, isLight }: FirebaseMa
       const loadedItems = docsWithId.map(d => d.data);
       
       updateSyncSnapshot(loadedItems);
-      onImport(loadedItems, currentRound);
+      onImport(loadedItems, currentRound, sheetDocSnap.data()?.name);
       setActiveSheetId(sheetId);
       localStorage.setItem('mobile_scanner_fb_sheet_id', sheetId);
       if (claim) {
@@ -315,7 +332,7 @@ export default function FirebaseManager({ items, onImport, isLight }: FirebaseMa
       docsWithId.sort((a,b) => parseInt(a.id.split('_')[1] || '0') - parseInt(b.id.split('_')[1] || '0'));
       const loadedItems = docsWithId.map(d => d.data);
       
-      onImport(loadedItems, currentRound);
+      onImport(loadedItems, currentRound, sheetDocSnap.data()?.name);
       setActiveSheetId(null);
       localStorage.removeItem('mobile_scanner_fb_sheet_id');
       localStorage.removeItem('mobile_scanner_sync_snapshot_v1');
@@ -403,7 +420,7 @@ export default function FirebaseManager({ items, onImport, isLight }: FirebaseMa
           const batch = writeBatch(db);
           chunk.forEach(({ item, index }) => {
             const itemRef = doc(collection(db, `sheets/${activeSheetId}/items`), `item_${index}`);
-            batch.set(itemRef, {
+            const updateData: any = {
               licz1: item.licz1,
               licz2: item.licz2,
               licz3: item.licz3,
@@ -411,7 +428,23 @@ export default function FirebaseManager({ items, onImport, isLight }: FirebaseMa
               osoba1: item.osoba1 || null,
               osoba2: item.osoba2 || null,
               osoba3: item.osoba3 || null
-            }, { merge: true });
+            };
+
+            if (item.isNew) {
+              updateData.isNew = true;
+              updateData.kodGlowny = item.kodGlowny || "";
+              updateData.kodPomocniczy = item.kodPomocniczy || "";
+              updateData.nazwa = item.nazwa || "";
+              updateData.lokalizacja = item.lokalizacja || "";
+              updateData.partia = item.partia || "";
+              updateData.dataWaznosci = item.dataWaznosci || "";
+              updateData.lp = item.lp || "";
+              updateData.iloscSystemowa = item.iloscSystemowa || 0;
+              updateData.sj = item.sj || "";
+              updateData.rowNum = item.rowNum;
+            }
+
+            batch.set(itemRef, updateData, { merge: true });
             totalUpdated++;
           });
           await batch.commit();
@@ -521,6 +554,21 @@ export default function FirebaseManager({ items, onImport, isLight }: FirebaseMa
         await updateDoc(doc(db, 'sheets', activeSheetId!), {
           status: 'completed'
         });
+        
+        try {
+          const sheetName = sheets.find(s => s.id === activeSheetId)?.name || 'Arkusz';
+          await addDoc(collection(db, 'notifications'), {
+            workerName: user?.email ? user.email.split('@')[0] : 'Admin',
+            message: `ZAKOŃCZONO ostatecznie i zamknięto cały arkusz: ${sheetName}.`,
+            location: 'System',
+            isRead: false,
+            timestamp: Timestamp.now()
+          });
+        } catch(e: any) {
+          console.error("Push Error", e);
+          alert("Błąd wysyłania powiadomienia (sprawdź zasady w Firebase): " + e.message);
+        }
+
         onImport([]); // Wyczyść stan
         setActiveSheetId(null);
         localStorage.removeItem('mobile_scanner_fb_sheet_id');
@@ -572,10 +620,10 @@ export default function FirebaseManager({ items, onImport, isLight }: FirebaseMa
           ref={fileInputRef}
           type="file"
           accept=".xlsx,.xls,.xlsb"
+          multiple
           onChange={(e) => {
-              if (e.target.files && e.target.files[0]) {
-                  uploadFileDirectlyToCloud(e.target.files[0]);
-                  e.target.value = '';
+              if (e.target.files && e.target.files.length > 0) {
+                  uploadFileDirectlyToCloud(e.target.files);
               }
           }}
           className="hidden"
@@ -623,7 +671,7 @@ export default function FirebaseManager({ items, onImport, isLight }: FirebaseMa
                 {activeSheetId === sheet.id ? (
                   <>
                     <button 
-                      onClick={() => onImport(items)}
+                      onClick={() => onImport(items, sheet.currentRound, sheet.name)}
                       className="px-4 py-2 rounded-lg bg-teal-500 hover:bg-teal-400 text-slate-950 text-xs font-bold cursor-pointer w-full sm:w-auto transition-colors text-center flex items-center justify-center gap-1 shadow-xs"
                     >
                       Skanuj (Wznów)

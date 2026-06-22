@@ -35,26 +35,12 @@ export default function Login() {
         });
         
         if (loaded.length > 0) {
-          // Check if workers are missing, if less than 2 accounts, seed missing fallbacks
-          if (loaded.length < 2) {
-             for (const f of FALLBACK_ACCOUNTS) {
-                if (!loaded.find(l => l.email === f.email)) {
-                   await setDoc(doc(db, 'app_accounts', f.id), f);
-                   loaded.push(f);
-                }
-             }
-          }
-          // Sort so that admins are typically at the top
           loaded.sort((a, b) => a.name.localeCompare(b.name));
           setAccounts(loaded);
           setSelectedEmail(loaded[0].email);
         } else {
-          // If no accounts exist in DB, set the fallback and upload it to DB
           setAccounts(FALLBACK_ACCOUNTS);
           setSelectedEmail(FALLBACK_ACCOUNTS[0].email);
-          for (const f of FALLBACK_ACCOUNTS) {
-             await setDoc(doc(db, 'app_accounts', f.id), f);
-          }
         }
       } catch (err) {
         console.error("Failed to load accounts", err);

@@ -16,8 +16,25 @@ class SoundEffects {
     }
   }
 
+  private getSettings() {
+    try {
+      const saved = localStorage.getItem('mobile_scanner_config_v1');
+      if (saved) {
+        const conf = JSON.parse(saved);
+        return { dzwieki: conf.dzwieki ?? true, wibracje: conf.wibracje ?? true };
+      }
+    } catch(e) {}
+    return { dzwieki: true, wibracje: true };
+  }
+
   // Quick high-pitched beep representing successful scanner reads
   public playSuccess() {
+    const { dzwieki, wibracje } = this.getSettings();
+    if (wibracje && navigator.vibrate) {
+      navigator.vibrate(50); // Krótka wibracja
+    }
+    if (!dzwieki) return;
+    
     try {
       this.initCtx();
       if (!this.ctx) return;
@@ -43,6 +60,12 @@ class SoundEffects {
 
   // Slower pitch double beep for Warnings, such as unknown codes
   public playWarning() {
+    const { dzwieki, wibracje } = this.getSettings();
+    if (wibracje && navigator.vibrate) {
+      navigator.vibrate([150, 50, 150]); // Podwójna średnia wibracja
+    }
+    if (!dzwieki) return;
+
     try {
       this.initCtx();
       if (!this.ctx) return;
@@ -74,6 +97,12 @@ class SoundEffects {
 
   // Low frequency warning buzz for scanning blocks or errors
   public playError() {
+    const { dzwieki, wibracje } = this.getSettings();
+    if (wibracje && navigator.vibrate) {
+      navigator.vibrate(400); // Długa silna wibracja na błąd
+    }
+    if (!dzwieki) return;
+
     try {
       this.initCtx();
       if (!this.ctx) return;

@@ -7,10 +7,12 @@ service cloud.firestore {
       return request.auth != null;
     }
 
-    // 1. Zabezpieczenie kolekcji użytkowników (logowanie / rejestracja)
-    match /users/{userId} {
-      // Użytkownik może czytać i edytować tylko własny profil uzytkownika
-      allow read, write: if isAuthenticated() && request.auth.uid == userId;
+    // 1. Zabezpieczenie kolekcji użytkowników i ról
+    match /app_accounts/{accountId} {
+      // W wersji produkcyjnej powinno tu być: if isAdmin();
+      // Pozwalamy na publiczny odczyt (aby lista kont załadowała się na ekranie logowania!)
+      allow read: if true;
+      allow write: if isAuthenticated();
     }
 
     // 2. Zabezpieczenie udostępnionych arkuszy inwentaryzacyjnych
@@ -27,6 +29,11 @@ service cloud.firestore {
     // 3. Zabezpieczenie globalnych ustawień (np. PIN zapisywany w chmurze)
     match /settings/{document=**} {
       // Tylko zalogowani użytkownicy mogą odczytywać i zapisywać ustawienia Globalne
+      allow read, write: if isAuthenticated();
+    }
+
+    // 4. Zabezpieczenie powiadomień Real-time (Web Push / Historia)
+    match /notifications/{document=**} {
       allow read, write: if isAuthenticated();
     }
   }

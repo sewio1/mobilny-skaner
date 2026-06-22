@@ -21,9 +21,11 @@ import SettingsPanel from './SettingsPanel';
 import ExcelImportExport from './ExcelImportExport';
 import FirebaseManager from './FirebaseManager';
 import WorkerNameModal from './WorkerNameModal';
+import Numpad from './Numpad';
 import { UserContext } from '../App';
 import { db, auth } from '../firebase';
-import { doc, onSnapshot, setDoc } from 'firebase/firestore';
+import { doc, onSnapshot, setDoc, collection, addDoc, Timestamp } from 'firebase/firestore';
+import NotificationBell from './NotificationBell';
 import { signOut } from 'firebase/auth';
 
 import { exportToExcel } from '../utils/excelHelper';
@@ -57,6 +59,14 @@ export default function Dashboard() {
   }, [user, config.workerName]);
 
   // Sync global settings from firebase
+  useEffect(() => {
+    // We already have a robust mechanism below, but we can also use this for specific things
+  }, []);
+
+  const [activeSheetName, setActiveSheetName] = useState<string>(() => {
+    return localStorage.getItem('mobile_scanner_sheet_name_v1') || '';
+  });
+
   useEffect(() => {
     const unsubscribe = onSnapshot(doc(db, "settings", "globalConfig"), (docSnap) => {
       if (docSnap.exists()) {
@@ -388,6 +398,20 @@ export default function Dashboard() {
         };
         setLogs(prev => [newLog, ...prev]);
 
+        // Emit real-time notification to the team (Enterprise WMS feature)
+        if (!config.powiadomieniaTylkoArkusz) {
+          try {
+            const sheetInfo = activeSheetName ? ` (${activeSheetName})` : '';
+            addDoc(collection(db, 'notifications'), {
+              workerName: config.workerName || user?.email || 'Nieznany Pracownik',
+              message: `Zatwierdzono strefę: ${activeLocation}${sheetInfo}. Tura ${countRound}. Policzono: ${totalCountedQty} szt.`,
+              location: activeLocation,
+              isRead: false,
+              timestamp: Timestamp.now()
+            }).catch(e => console.error("Web Push Error", e));
+          } catch(e) {}
+        }
+
         // Soft Reset
         setActiveLocation('');
         setIsLocationLocked(false);
@@ -407,10 +431,13 @@ export default function Dashboard() {
     const locationItems = items.filter(i => (i.lokalizacja || '').toUpperCase() === activeLocation);
 
     // 1. Search for matching code in our expectation directory inside the current active location
+    const scanMode = config.trybSkanowania || 'oba';
     const matchedItems = locationItems.filter(item => {
       const matchPrimary = (item.kodGlowny || '').toUpperCase() === barcode;
       const matchAux = (item.kodPomocniczy || '').toUpperCase() === barcode;
-      return matchPrimary || matchAux;
+      if (scanMode === 'ean') return matchAux;
+      if (scanMode === 'kodGlowny') return matchPrimary;
+      return matchPrimary || matchAux; // 'oba' — domyślnie
     });
 
     if (matchedItems.length === 1) {
@@ -435,9 +462,10 @@ export default function Dashboard() {
 
     // 2. Check Expiration and Batch verification state (B3 validation)
     const isVerificationEnabled = config.weryfikacjaPartii;
-    const isLotIgnored = isBatchIgnored(expectedBatch);
+    const hasValidBatchToVerify = expectedBatch !== "" && !isBatchIgnored(expectedBatch);
+    const hasValidExpiryToVerify = expectedExpiry !== "";
 
-    const requiresVerification = isVerificationEnabled && !isLotIgnored && (expectedBatch !== "" || expectedExpiry !== "");
+    const requiresVerification = isVerificationEnabled && (hasValidBatchToVerify || hasValidExpiryToVerify);
 
     if (requiresVerification) {
       // Trigger batch match confirmation popup
@@ -611,17 +639,37 @@ export default function Dashboard() {
       lp: String(items.length + 1),
       partia: manualBatch.trim() || "-",
       dataWaznosci: manualExpiry.trim() || "-",
-      adnotacje: "Rozbicie partii (Nowy lot)",
+      adnotacje: "Rozbicie na nową partię (Partia: " + manualBatch.trim() + ", Data ważn: " + manualExpiry.trim() + ")",
       isNew: true,
     };
 
-    setItems(prev => [...prev, newRecord]);
+    setItems(prev => {
+      const newItems = [...prev];
+      const srcIndex = newItems.findIndex(i => i.rowNum === deviationInput.rowNum);
+      if (srcIndex >= 0) {
+        const src = newItems[srcIndex];
+        const existingAdn = src.adnotacje ? src.adnotacje + " | " : "";
+        newItems[srcIndex] = {
+          ...src,
+          adnotacje: existingAdn + `Zgłoszono nową partię: ${manualBatch.trim() || '-'}, data: ${manualExpiry.trim() || '-'}`
+        };
+      }
+      return [...newItems, newRecord];
+    });
 
-    // Add key to expectation set and apply count
+    // Add key to expectation set
     const newExpectedKey = `${(srcRow.kodGlowny || '').toUpperCase()}_row${newRowIndex}`;
     setSessionExpectedCodes(prev => [...prev, newExpectedKey]);
     
-    applyIncrementalCount(newExpectedKey, newRowIndex, 1, manualBatch.trim(), manualExpiry.trim(), true);
+    // Zamiast od razu dodawać 1 sztukę (applyIncrementalCount), otwieramy okno Numpada
+    setBulkScanQuery({
+      barcode: deviationInput.barcode,
+      description: srcRow.nazwa,
+      rowNum: newRowIndex,
+      sysQty: 0,
+      expectedKey: newExpectedKey
+    });
+    setBulkInputQty("");
 
     setDeviationInput(null);
   };
@@ -653,8 +701,8 @@ export default function Dashboard() {
       licz2: null,
       licz3: null,
       lp: String(items.length + 1),
-      partia: modelItem ? modelItem.partia : "brak",
-      dataWaznosci: modelItem ? modelItem.dataWaznosci : "brak",
+      partia: modelItem ? modelItem.partia : "",
+      dataWaznosci: modelItem ? modelItem.dataWaznosci : "",
       adnotacje: "Dodano na skanerze (lokalizacja)",
       isNew: true
     };
@@ -760,6 +808,9 @@ export default function Dashboard() {
           </div>
 
           <div className="flex items-center gap-2 relative">
+            {/* Real-time Notification Bell */}
+            <NotificationBell isLight={isLight} />
+
             {/* Quick theme switcher button */}
             <button
               id="fast_theme_toggle_btn"
@@ -839,22 +890,37 @@ export default function Dashboard() {
       <main className="flex-1 w-full max-w-lg mx-auto px-4 py-5 flex flex-col gap-5 overflow-x-hidden">
         
         {/* PROGRESS INDICATOR */}
-        {items.length > 0 && (
-          <div className={`p-4 rounded-3xl border transition-colors duration-200 ${isLight ? 'bg-white border-slate-200 shadow-xs' : 'bg-gradient-to-tr from-slate-900 to-slate-950 border-teal-500/15'} shadow-sm space-y-3`}>
-            <div className="flex justify-between items-center text-xs">
-              <span className={`${cTextMuted}`}>Bieżący postęp inwentaryzacji:</span>
-              <span className="text-teal-600 dark:text-teal-400 font-bold font-mono">
-                {items.length > 0 ? items.filter(i => countRound === '1' ? i.licz1 !== null : countRound === '2' ? i.licz2 !== null : i.licz3 !== null).length : 0} / {items.length} pozycji
-              </span>
+        {items.length > 0 && (() => {
+          // Obliczamy ile towarów zostało już policzonych (zarówno z bazy, jak i w aktualnie otwartej sesji)
+          let counted = 0;
+          items.forEach(i => {
+            const hasGlobalCount = countRound === '1' ? i.licz1 !== null : countRound === '2' ? i.licz2 !== null : i.licz3 !== null;
+            const expectedKey = `${(i.kodGlowny || '').toUpperCase()}_row${i.rowNum}`;
+            const hasSessionCount = sessionScannedItems.has(expectedKey);
+            
+            if (hasGlobalCount || hasSessionCount) {
+              counted++;
+            }
+          });
+          const percent = items.length > 0 ? (counted / items.length) * 100 : 0;
+
+          return (
+            <div className={`p-4 rounded-3xl border transition-colors duration-200 ${isLight ? 'bg-white border-slate-200 shadow-xs' : 'bg-gradient-to-tr from-slate-900 to-slate-950 border-teal-500/15'} shadow-sm space-y-3`}>
+              <div className="flex justify-between items-center text-xs">
+                <span className={`${cTextMuted}`}>Bieżący postęp inwentaryzacji:</span>
+                <span className="text-teal-600 dark:text-teal-400 font-bold font-mono">
+                  {counted} / {items.length} pozycji
+                </span>
+              </div>
+              <div className={`h-2 w-full ${cProgressBg} rounded-full overflow-hidden`}>
+                <div 
+                  className="h-full bg-gradient-to-r from-teal-500 to-emerald-400 rounded-full transition-all duration-500" 
+                  style={{ width: `${percent}%` }}
+                ></div>
+              </div>
             </div>
-            <div className={`h-2 w-full ${cProgressBg} rounded-full overflow-hidden`}>
-              <div 
-                className="h-full bg-gradient-to-r from-teal-500 to-emerald-400 rounded-full transition-all duration-500" 
-                style={{ width: `${items.length > 0 ? (items.filter(i => countRound === '1' ? i.licz1 !== null : countRound === '2' ? i.licz2 !== null : i.licz3 !== null).length / items.length) * 100 : 0}%` }}
-              ></div>
-            </div>
-          </div>
-        )}
+          );
+        })()}
 
         {/* START SCREEN WHEN NO SHEET LOADED */}
         {items.length === 0 && (
@@ -1066,8 +1132,17 @@ export default function Dashboard() {
                 const remaining = i.iloscSystemowa - currentSessionQty;
                 return remaining > 0;
               })}
-              otherLocationItems={[]}
+              scannedLocationItems={items.filter(i => {
+                if ((i.lokalizacja || '').toUpperCase() !== activeLocation) return false;
+                if (countRound === '2' && (i.licz1 === null || i.licz1 === i.iloscSystemowa)) return false;
+                if (countRound === '3' && (i.licz2 === null || i.licz2 === i.iloscSystemowa)) return false;
+                const codeKey = `${(i.kodGlowny || '').toUpperCase()}_row${i.rowNum}`;
+                const currentSessionQty = sessionScannedItems.get(codeKey)?.qty || 0;
+                const remaining = i.iloscSystemowa - currentSessionQty;
+                return remaining <= 0;
+              })}
               isLight={isLight}
+              showHints={config.podpowiedziWpisywania}
             />
 
             {/* CENTRAL TABS CONTROLLERS */}
@@ -1202,52 +1277,71 @@ export default function Dashboard() {
                     Array.from(sessionScannedItems.entries()).map(([key, val], idx) => {
                       const originItem = items.find(i => i.rowNum === val.rowRef);
                       const sysQty = originItem ? originItem.iloscSystemowa : 0;
-                      const hasDiscrepancy = val.qty !== sysQty;
 
                       return (
                         <div 
                           key={`${key}-${idx}`}
-                          className={`${cCard} rounded-2xl p-4 flex justify-between items-center shadow-xs transition-colors duration-200`}
+                          className={`${cCard} rounded-2xl p-4 shadow-xs transition-colors duration-200`}
                         >
-                          <div className="flex-1 pr-4">
-                            <h5 className={`font-bold text-xs ${isLight ? 'text-slate-900' : 'text-slate-100'} flex items-center gap-1.5`}>
-                              {val.addedManually && (
-                                <span className="text-[9px] bg-amber-500/10 border border-amber-500/30 text-amber-600 dark:text-amber-400 px-1.5 py-0.5 rounded font-black shrink-0">
-                                  DODANY
-                                </span>
+                          <div className="flex justify-between items-start gap-3">
+                            <div className="flex-1 pr-2 min-w-0">
+                              <h5 className={`font-bold text-xs ${isLight ? 'text-slate-900' : 'text-slate-100'} flex items-center gap-1.5`}>
+                                {val.addedManually && (
+                                  <span className="text-[9px] bg-amber-500/10 border border-amber-500/30 text-amber-600 dark:text-amber-400 px-1.5 py-0.5 rounded font-black shrink-0">
+                                    DODANY
+                                  </span>
+                                )}
+                                {originItem ? originItem.nazwa : `Nieznany Nr art. (${key.split('_')[0]})`}
+                              </h5>
+                              <p className="text-[10px] text-slate-500 mt-0.5 font-mono">
+                                Nr art.: {originItem?.kodGlowny || key.split('_')[0]} | EAN: {originItem?.kodPomocniczy || 'brak'}
+                              </p>
+                              <p className="text-[10px] text-slate-500 mt-0.5 font-mono">
+                                Partia: {val.batch || 'brak'} / Ważn: {val.expiry || 'brak'}
+                              </p>
+                              {originItem?.customFields && Object.keys(originItem.customFields).length > 0 && (
+                                <div className="flex flex-wrap gap-1 mt-2">
+                                  {Object.entries(originItem.customFields).map(([key, value]) => (
+                                    <div key={key} className={`px-1.5 py-0.5 rounded text-[9px] border flex items-center ${isLight ? 'bg-indigo-50 border-indigo-200 text-indigo-700' : 'bg-indigo-500/10 border-indigo-500/30 text-indigo-300'}`}>
+                                      <span className="opacity-70 mr-1 truncate max-w-[60px]">{key}:</span>
+                                      <span className="font-bold truncate max-w-[100px]">{value}</span>
+                                    </div>
+                                  ))}
+                                </div>
                               )}
-                              {originItem ? originItem.nazwa : `Nieznany Nr art. (${key.split('_')[0]})`}
-                            </h5>
-                            <p className="text-[10px] text-slate-500 mt-1 font-mono">
-                              Batch: {val.batch || "brak"} / Expiry: {val.expiry || "brak"}
-                            </p>
-                            {originItem?.customFields && Object.keys(originItem.customFields).length > 0 && (
-                              <div className="flex flex-wrap gap-1 mt-2">
-                                {Object.entries(originItem.customFields).map(([key, value]) => (
-                                  <div key={key} className={`px-1.5 py-0.5 rounded text-[9px] border flex items-center ${isLight ? 'bg-indigo-50 border-indigo-200 text-indigo-700' : 'bg-indigo-500/10 border-indigo-500/30 text-indigo-300'}`}>
-                                    <span className="opacity-70 mr-1 truncate max-w-[60px]">{key}:</span>
-                                    <span className="font-bold truncate max-w-[100px]">{value}</span>
-                                  </div>
-                                ))}
-                              </div>
-                            )}
-                          </div>
-                          
-                          <div className="text-right shrink-0">
-                            <div className={`text-sm font-extrabold font-mono ${
-                              val.qty === sysQty 
-                                ? (isLight ? 'text-emerald-600 font-black' : 'text-emerald-400')
-                                : (val.qty === 0 && sysQty > 0)
-                                ? (isLight ? 'text-rose-600' : 'text-rose-500')
-                                : (val.qty > 0 && val.qty < sysQty)
-                                ? (isLight ? 'text-blue-600' : 'text-blue-400')
-                                : (isLight ? 'text-amber-600' : 'text-amber-500')
-                            }`}>
-                              {val.qty} szt.
                             </div>
-                            <span className="text-[9px] text-slate-500 block">
-                              Sys. ({sysQty} szt.)
-                            </span>
+                            
+                            <div className="flex flex-col items-end gap-2 shrink-0">
+                              <div className="text-right">
+                                <div className={`text-sm font-extrabold font-mono ${
+                                  val.qty === sysQty 
+                                    ? (isLight ? 'text-emerald-600 font-black' : 'text-emerald-400')
+                                    : (val.qty === 0 && sysQty > 0)
+                                    ? (isLight ? 'text-rose-600' : 'text-rose-500')
+                                    : (val.qty > 0 && val.qty < sysQty)
+                                    ? (isLight ? 'text-blue-600' : 'text-blue-400')
+                                    : (isLight ? 'text-amber-600' : 'text-amber-500')
+                                }`}>
+                                  {val.qty} szt.
+                                </div>
+                                <span className="text-[9px] text-slate-500 block">
+                                  Sys. ({sysQty} szt.)
+                                </span>
+                              </div>
+                              {/* Przycisk dobijania — skanuje ten sam artykuł ponownie */}
+                              {originItem && (
+                                <button
+                                  onClick={() => handleBarcodeScanned(originItem.kodPomocniczy || originItem.kodGlowny)}
+                                  className={`text-[10px] font-bold px-2 py-1 rounded-lg transition-colors border cursor-pointer ${
+                                    isLight
+                                      ? 'bg-teal-50 border-teal-200 text-teal-700 hover:bg-teal-100'
+                                      : 'bg-teal-500/10 border-teal-500/30 text-teal-400 hover:bg-teal-500/20'
+                                  }`}
+                                >
+                                  +1 dobij
+                                </button>
+                              )}
+                            </div>
                           </div>
                         </div>
                       );
@@ -1365,9 +1459,18 @@ export default function Dashboard() {
 
               <FirebaseManager 
                 items={items}
-                onImport={(newItems, importedRound) => {
+                onImport={(newItems, importedRound, sheetName) => {
                   setItems(newItems);
                   if (importedRound) setCountRound(importedRound as CountRound);
+                  
+                  if (newItems.length === 0) {
+                     setActiveSheetName('');
+                     localStorage.removeItem('mobile_scanner_sheet_name_v1');
+                  } else if (sheetName) {
+                    setActiveSheetName(sheetName);
+                    localStorage.setItem('mobile_scanner_sheet_name_v1', sheetName);
+                  }
+                  
                   if (newItems.length > 0) setIsDataManagerOpen(false);
                 }}
                 isLight={isLight}
@@ -1377,6 +1480,8 @@ export default function Dashboard() {
                   items={items}
                   onImport={(newItems) => {
                     setItems(newItems);
+                    setActiveSheetName('Lokalny Plik');
+                    localStorage.setItem('mobile_scanner_sheet_name_v1', 'Lokalny Plik');
                     if (newItems.length > 0) setIsDataManagerOpen(false);
                   }}
                   onResetToDemo={() => {
@@ -1459,6 +1564,7 @@ export default function Dashboard() {
             setIsSettingsOpen(true);
           }}
           onClose={() => setIsPinOpen(false)}
+          isLight={isLight}
         />
       )}
 
@@ -1468,6 +1574,7 @@ export default function Dashboard() {
           config={config}
           isAdmin={user?.role === 'admin'}
           onClose={() => setIsSettingsOpen(false)}
+          isLight={isLight}
           onSave={async (newConf, isGlobal) => {
             setConfig(newConf);
             setIsSettingsOpen(false);
@@ -1516,20 +1623,19 @@ export default function Dashboard() {
 
             <div className="flex flex-col gap-2">
               <label className={`text-xs font-semibold text-left ${isLight ? 'text-slate-600' : 'text-slate-400'}`}>Podaj CAŁKOWITĄ znalezioną ilość fizyczną:</label>
-              <input
-                id="bulk_quantity_field"
-                type="number"
-                min={0}
-                value={bulkInputQty}
-                onChange={(e) => setBulkInputQty(e.target.value)}
-                className={`w-full rounded-2xl p-4 font-mono text-center text-xl font-bold focus:outline-none transition-all ${
+              <div 
+                className={`w-full rounded-2xl p-4 font-mono text-center text-xl font-bold transition-all ${
                   isLight 
-                    ? 'bg-slate-50 border-2 border-slate-200 text-teal-700 focus:border-teal-600' 
-                    : 'bg-slate-950 border-2 border-slate-800 text-teal-400 focus:border-teal-400'
+                    ? 'bg-slate-50 border-2 border-slate-200 text-teal-700' 
+                    : 'bg-slate-950 border-2 border-slate-800 text-teal-400'
                 }`}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') submitBulkScan();
-                }}
+              >
+                {bulkInputQty || '0'}
+              </div>
+              <Numpad 
+                value={bulkInputQty} 
+                onChange={setBulkInputQty} 
+                isLight={isLight} 
               />
             </div>
 
@@ -1793,18 +1899,22 @@ export default function Dashboard() {
 
                 <div className="flex flex-col gap-2">
                   <label className={`text-xs font-medium text-left ${isLight ? 'text-slate-600' : 'text-slate-400'}`}>Podaj ilość:</label>
-                  <input
-                    type="number"
-                    min={1}
-                    value={addUnknownQty}
-                    onChange={(e) => setAddUnknownQty(e.target.value)}
-                    className={`w-full rounded-2xl p-3 font-mono text-center text-lg font-bold focus:outline-none border ${
+                  <div 
+                    className={`w-full rounded-2xl p-3 font-mono text-center text-lg font-bold border ${
                       isLight 
-                        ? 'bg-slate-50 border-slate-200 text-teal-700 focus:border-teal-500' 
-                        : 'bg-slate-950 border-slate-800 text-teal-400 focus:border-teal-500'
+                        ? 'bg-slate-50 border-slate-200 text-teal-700' 
+                        : 'bg-slate-950 border-slate-800 text-teal-400'
                     }`}
-                  />
+                  >
+                    {addUnknownQty || '0'}
+                  </div>
                 </div>
+
+                <Numpad 
+                  value={addUnknownQty} 
+                  onChange={setAddUnknownQty} 
+                  isLight={isLight} 
+                />
 
                 <div className="flex gap-3">
                   <button

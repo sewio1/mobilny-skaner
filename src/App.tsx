@@ -8,7 +8,7 @@ import Dashboard from './components/Dashboard';
 import Login from './components/Login';
 import { auth, db } from './firebase';
 import { onAuthStateChanged, User } from 'firebase/auth';
-import { doc, getDoc } from 'firebase/firestore';
+import { collection, query, where, getDocs } from 'firebase/firestore';
 
 export type AppUser = {
   uid: string;
@@ -27,10 +27,24 @@ export default function App() {
       if (firebaseUser) {
         // Fetch role from Firestore
         let role: 'admin' | 'worker' = 'worker';
-        // In a real app we'd fetch the role.
-        // For testing, let's hardcode based on email to not rely on DB setup initially
-        if (firebaseUser.email?.startsWith('admin') || firebaseUser.email === 'sew.gwardys@gmail.com') {
-          role = 'admin';
+        try {
+          if (firebaseUser.email) {
+            // Bezpieczne zapytanie o profil usera po emailu
+            const q = query(collection(db, 'app_accounts'), where('email', '==', firebaseUser.email));
+            const querySnapshot = await getDocs(q);
+            if (!querySnapshot.empty) {
+              const data = querySnapshot.docs[0].data();
+              if (data.role === 'admin' || data.role === 'worker') {
+                role = data.role;
+              }
+            } else if (firebaseUser.email === 'sew.gwardys@gmail.com' || firebaseUser.email.toLowerCase().includes('admin')) {
+              // Zabezpieczenie ratunkowe - twardy admin dla głównego właściciela,
+              // i kont testowych, abyś nie stracił dostępu w fazie testów
+              role = 'admin';
+            }
+          }
+        } catch (error) {
+          console.error("Błąd podczas pobierania roli z Firestore:", error);
         }
         setUser({
           uid: firebaseUser.uid,

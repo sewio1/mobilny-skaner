@@ -34,8 +34,13 @@ export interface InventoryConfig {
   ignorowanePartie: string; // B5: Semicolon-separated lot/batch names to ignore e.g. "0;000;brak;-"
   pokazujInnaLok: boolean; // B6: Inform user of original location when scanned incorrectly
   pozwalajDodawac: boolean; // B7: Allow adding unrecognized/wrong items
+  podpowiedziWpisywania?: boolean; // Show missing items in manual entry modal
+  powiadomieniaTylkoArkusz?: boolean; // If true, only notify on full sheet completion
   motyw?: 'light' | 'dark'; // Light or dark theme preference
   workerName?: string; // Przez kogo został podjęty (osoba licząca)
+  wibracje?: boolean; // Toggle for haptic feedback
+  dzwieki?: boolean; // Toggle for sound effects
+  trybSkanowania?: 'ean' | 'kodGlowny' | 'oba'; // B8: Scan matching mode: by EAN only, by article nr only, or both
 }
 
 export type CountRound = '1' | '2' | '3';

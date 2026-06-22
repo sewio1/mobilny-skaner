@@ -1,5 +1,5 @@
 import { initializeApp } from 'firebase/app';
-import { getFirestore, initializeFirestore } from 'firebase/firestore';
+import { getFirestore, initializeFirestore, enableIndexedDbPersistence } from 'firebase/firestore';
 import { getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged, User } from 'firebase/auth';
 
 export const firebaseConfig = {
@@ -15,5 +15,13 @@ export const firebaseConfig = {
 export const app = initializeApp(firebaseConfig);
 export const db = initializeFirestore(app, {
   experimentalForceLongPolling: true,
+});
+
+enableIndexedDbPersistence(db).catch((err) => {
+  if (err.code === 'failed-precondition') {
+    console.warn('Wiele kart otwartych na raz, tryb offline dziala tylko w pierwszej karcie.');
+  } else if (err.code === 'unimplemented') {
+    console.warn('Przegladarka nie wspiera IndexedDB.');
+  }
 });
 export const auth = getAuth(app);

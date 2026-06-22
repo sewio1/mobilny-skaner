@@ -1,4 +1,6 @@
-import tailwindcss from '@tailwindcss/vite';
+// @tailwindcss/vite zastąpiony przez @tailwindcss/postcss w postcss.config.js
+// Dzięki temu Autoprefixer i postcss-preset-env mogą przetwarzać output Tailwinda
+// i konwertować nowoczesny CSS (oklch, color-mix) na starsze odpowiedniki (Chrome 80).
 import react from '@vitejs/plugin-react';
 import { VitePWA } from 'vite-plugin-pwa';
 import path from 'path';
@@ -7,8 +9,8 @@ import {defineConfig} from 'vite';
 export default defineConfig(() => {
   return {
     plugins: [
-      react(), 
-      tailwindcss(),
+      react(),
+      // tailwindcss() usunięty — Tailwind obsługiwany przez postcss.config.js
       VitePWA({
         registerType: 'autoUpdate',
         devOptions: {
@@ -32,6 +34,10 @@ export default defineConfig(() => {
         }
       })
     ],
+    // Jawny target budowania — esbuild nie wygeneruje składni JS niekompatybilnej z Chrome 80
+    build: {
+      target: 'chrome80',
+    },
     resolve: {
       alias: {
         '@': path.resolve(__dirname, '.'),

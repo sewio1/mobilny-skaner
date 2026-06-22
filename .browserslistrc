@@ -1,0 +1,7 @@
+# Kolektory danych PM560 mają WebView ~Chrome 80.
+# Autoprefixer i postcss-preset-env używają tego pliku, aby wiedzieć
+# jak agresywnie tłumaczyć nowoczesny CSS na starsze odpowiedniki.
+
+Chrome >= 80
+last 2 Chrome versions
+not dead

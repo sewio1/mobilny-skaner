@@ -5,7 +5,7 @@
 
 import React, { useRef, useState } from 'react';
 import * as XLSX from 'xlsx';
-import { exportToExcel } from '../utils/excelHelper';
+import { exportToExcel, exportDiscrepancyReport } from '../utils/excelHelper';
 import { Upload, Download, Mail, CheckCircle2, AlertTriangle, FileSpreadsheet, Send, ArrowRight, X } from 'lucide-react';
 import { InventoryItem } from '../types';
 import { sounds } from '../utils/sound';
@@ -16,9 +16,10 @@ interface ExcelImportExportProps {
   onResetToDemo: () => void;
   theme?: 'light' | 'dark';
   workerName?: string;
+  countRound?: string;
 }
 
-export default function ExcelImportExport({ items, onImport, onResetToDemo, theme = 'dark', workerName }: ExcelImportExportProps) {
+export default function ExcelImportExport({ items, onImport, onResetToDemo, theme = 'dark', workerName, countRound = '1' }: ExcelImportExportProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [isMailOpen, setIsMailOpen] = useState<boolean>(false);
   const [isConfirmingClear, setIsConfirmingClear] = useState<boolean>(false);
@@ -51,29 +52,38 @@ export default function ExcelImportExport({ items, onImport, onResetToDemo, them
       .replace(/[^a-z0-9]/g, ""); // strip space and punctuation for sturdy comparison
   };
 
-  // --- PARSE IMPORTED EXCEL WORKBOOK (VBA ImportujNoweDane_Wersja9) ---
-  const handleFile = (file: File) => {
-    const reader = new FileReader();
-    reader.onload = (e) => {
+  // --- PARSE IMPORTED EXCEL WORKBOOKS (VBA ImportujNoweDane_Wersja9) ---
+  const handleFiles = async (files: FileList | File[]) => {
+    const allParsedItems: InventoryItem[] = [];
+    const uniqueLocs = new Set<string>();
+    let hasError = false;
+    let errorMsg = "";
+
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
       try {
-        const data = e.target?.result;
-        if (!data) return;
+        const data = await new Promise<ArrayBuffer>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = (e) => {
+            if (e.target?.result) resolve(e.target.result as ArrayBuffer);
+            else reject(new Error("Brak danych w pliku"));
+          };
+          reader.onerror = (err) => reject(err);
+          reader.readAsArrayBuffer(file);
+        });
 
         const workbook = XLSX.read(data, { type: 'array' });
-        // Use the first sheet or let them import the active sheet
+        // Use the first sheet
         const sheetName = workbook.SheetNames[0];
         const worksheet = workbook.Sheets[sheetName];
         
         // Convert to JSON
         const rawRows = XLSX.utils.sheet_to_json<any>(worksheet, { defval: "" });
 
-        if (rawRows.length === 0) {
-          throw new Error("Wybrany arkusz jest pusty.");
-        }
+        if (rawRows.length === 0) continue;
 
         // Detect columns from headers
         const firstRowKeys = Object.keys(rawRows[0]);
-        console.log("Headers detected:", firstRowKeys);
 
         // Helper to match column headers even if there are subtle differences (VBA mapping simulation)
         const findColumn = (possibleNames: string[]): string => {
@@ -152,7 +162,7 @@ export default function ExcelImportExport({ items, onImport, onResetToDemo, them
         ].filter(Boolean));
 
         if (!colLokalizacjaKey || !colKodGlownyKey) {
-          throw new Error("Nie można odnaleźć kluczowych kolumn: 'Nr miejsca' (Lokalizacja) lub 'Nr artykułu' (SKU). Upewnij się, że pierwszy wiersz to nagłówki.");
+          throw new Error(`Plik ${file.name}: Nie można odnaleźć kluczowych kolumn (Nr miejsca lub Nr artykułu).`);
         }
 
         const parsedItems: InventoryItem[] = rawRows.map((row: any, index: number) => {
@@ -174,7 +184,7 @@ export default function ExcelImportExport({ items, onImport, onResetToDemo, them
           }
 
           return {
-            id: `imported-${index}-${Date.now()}`,
+            id: `imported-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
             rowNum: index + 2,
             lokalizacja: String(row[colLokalizacjaKey]).trim(),
             kodGlowny: String(row[colKodGlownyKey]).trim(),
@@ -193,23 +203,38 @@ export default function ExcelImportExport({ items, onImport, onResetToDemo, them
           };
         });
 
-        // Unique locations count
-        const uniqueLocs = new Set(parsedItems.map(i => i.lokalizacja)).size;
-
-        onImport(parsedItems);
-        sounds.playSuccess();
-        setImportReport({ count: parsedItems.length, locations: uniqueLocs });
-        
-        // Hide report alert after 6 seconds
-        setTimeout(() => setImportReport(null), 6000);
+        parsedItems.forEach(i => {
+          allParsedItems.push(i);
+          uniqueLocs.add(i.lokalizacja);
+        });
 
       } catch (err: any) {
-        sounds.playError();
-        console.error("Błąd importu Excela: ", err);
-        try { alert(`Błąd importu: ${err.message || err}`); } catch (e) {}
+        hasError = true;
+        errorMsg = err.message || err;
+        console.error(`Błąd importu Excela (${file.name}): `, err);
       }
-    };
-    reader.readAsArrayBuffer(file);
+    }
+
+    if (allParsedItems.length > 0) {
+      onImport(allParsedItems);
+      sounds.playSuccess();
+      setImportReport({ count: allParsedItems.length, locations: uniqueLocs.size });
+      
+      // Hide report alert after 6 seconds
+      setTimeout(() => setImportReport(null), 6000);
+
+      if (hasError) {
+        try { alert(`Wczytano poprawne pliki, ale zignorowano niektóre błędy:\n${errorMsg}`); } catch (e) {}
+      }
+    } else {
+      sounds.playError();
+      try { alert(`Błąd importu: ${hasError ? errorMsg : 'Brak danych w plikach'}`); } catch (e) {}
+    }
+    
+    // Reset the input so the same files can be re-selected if needed
+    if (fileInputRef.current) {
+        fileInputRef.current.value = "";
+    }
   };
 
   const handleDrag = (e: React.DragEvent) => {
@@ -227,8 +252,8 @@ export default function ExcelImportExport({ items, onImport, onResetToDemo, them
     e.stopPropagation();
     setDragActive(false);
 
-    if (e.dataTransfer.files && e.dataTransfer.files[0]) {
-      handleFile(e.dataTransfer.files[0]);
+    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+      handleFiles(e.dataTransfer.files);
     }
   };
 
@@ -246,6 +271,23 @@ export default function ExcelImportExport({ items, onImport, onResetToDemo, them
         try { alert(msg); } catch (e) {} 
       },
       workerName
+    );
+  };
+
+  const handleExportDiff = () => {
+    exportDiscrepancyReport(
+      items, 
+      (msg) => { 
+        if (msg.includes("Brak")) sounds.playError();
+        else sounds.playSuccess(); 
+        try { alert(msg); } catch (e) {}
+      }, 
+      (msg) => { 
+        sounds.playError();
+        try { alert(msg); } catch (e) {} 
+      },
+      workerName,
+      countRound
     );
   };
 
@@ -307,7 +349,12 @@ export default function ExcelImportExport({ items, onImport, onResetToDemo, them
             ref={fileInputRef}
             type="file"
             accept=".xlsx,.xls,.xlsb"
-            onChange={(e) => e.target.files && handleFile(e.target.files[0])}
+            multiple
+            onChange={(e) => {
+              if (e.target.files && e.target.files.length > 0) {
+                handleFiles(e.target.files);
+              }
+            }}
             className="hidden"
           />
           <Upload className={`h-8 w-8 ${isLight ? 'text-slate-400' : 'text-slate-500'} mb-2.5 animate-bounce`} />
@@ -332,21 +379,21 @@ export default function ExcelImportExport({ items, onImport, onResetToDemo, them
             }`}
           >
             <Download className={`h-4 w-4 ${(!items || items.length === 0) ? 'text-slate-400' : isLight ? 'text-teal-600 font-extrabold' : 'text-teal-400'}`} />
-            Pobierz Arkusz (.xlsx)
+            Pełny Arkusz
           </button>
 
           <button
-            id="send_email_mock_btn"
-            onClick={() => setIsMailOpen(true)}
+            id="download_diff_btn"
+            onClick={handleExportDiff}
             disabled={!items || items.length === 0}
             className={`flex items-center justify-center gap-1.5 p-3.5 rounded-2xl text-xs font-bold transition-all ${
               !items || items.length === 0 
                 ? 'opacity-50 cursor-not-allowed bg-slate-200 text-slate-500 dark:bg-slate-800 dark:text-slate-500' 
-                : `cursor-pointer ${cBtnMail}`
+                : `cursor-pointer bg-rose-500 hover:bg-rose-600 text-white shadow-xs`
             }`}
           >
-            <Mail className="h-4 w-4" />
-            Wyślij Arkusz E-mailem
+            <Download className="h-4 w-4 text-white" />
+            Raport Różnic
           </button>
 
         </div>
