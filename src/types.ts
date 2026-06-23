@@ -24,6 +24,8 @@ export interface InventoryItem {
   adnotacje: string; // "Adnotacje" - Comments
   isNew?: boolean; // Marker if this row was manually added on mobile
   customFields?: Record<string, string>; // Extra dynamic columns from Excel
+  nosnik?: string; // Numer nośnika (np. palety) z pliku Excel
+  parentRowNum?: number; // Referencja do oryginalnego wiersza (np. przy rozbiciu partii)
 }
 
 export interface InventoryConfig {
@@ -41,6 +43,13 @@ export interface InventoryConfig {
   wibracje?: boolean; // Toggle for haptic feedback
   dzwieki?: boolean; // Toggle for sound effects
   trybSkanowania?: 'ean' | 'kodGlowny' | 'oba'; // B8: Scan matching mode: by EAN only, by article nr only, or both
+  autoSyncAfterSave?: boolean; // Auto-sync to cloud after confirming a location
+  pokazujNosnikHint?: boolean; // Show which carrier an item belongs to when scanning wrong carrier
+  ukryjKlawiature?: boolean; // Block virtual keyboard from appearing (inputMode="none")
+  wymuszajNosnik?: boolean; // Wymuś wybór nośnika przed skanowaniem
+  blokadaDodawaniaPartii?: boolean; // Nie pozwalaj na dodawanie/zmianę dat i partii (ukryj opcję wprowadzania różnic)
+  logikaLiczenia2?: 'tylko_niezgodne' | 'wszystko'; // Co liczymy w 2 turze
+  logikaLiczenia3?: 'tylko_niezgodne' | 'wszystko'; // Co liczymy w 3 turze
 }
 
 export type CountRound = '1' | '2' | '3';

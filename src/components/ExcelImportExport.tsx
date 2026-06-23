@@ -6,7 +6,7 @@
 import React, { useRef, useState } from 'react';
 import * as XLSX from 'xlsx';
 import { exportToExcel, exportDiscrepancyReport } from '../utils/excelHelper';
-import { Upload, Download, Mail, CheckCircle2, AlertTriangle, FileSpreadsheet, Send, ArrowRight, X } from 'lucide-react';
+import { Upload, Download, Mail, CheckCircle2, AlertTriangle, FileSpreadsheet, Send, ArrowRight, X, Lock, Unlock } from 'lucide-react';
 import { InventoryItem } from '../types';
 import { sounds } from '../utils/sound';
 
@@ -32,6 +32,8 @@ export default function ExcelImportExport({ items, onImport, onResetToDemo, them
 
   const [dragActive, setDragActive] = useState<boolean>(false);
   const [importReport, setImportReport] = useState<{ count: number; locations: number } | null>(null);
+  const [isPanelExpanded, setIsPanelExpanded] = useState<boolean>(false);
+  const [sliderValue, setSliderValue] = useState<number>(0);
 
   // Helper helper to normalize Polish characters and special marks
   const normalizeStr = (str: string): string => {
@@ -154,11 +156,12 @@ export default function ExcelImportExport({ items, onImport, onResetToDemo, them
         const colPartiaKey = findColumn(["partia", "lot", "batch", "nr partii", "seria", "numer serii"]);
         const colDataKey = findColumn(["data wazn", "data waznosci", "data", "expiry", "date", "data ważności", "termin ważności"]);
         const colAdnotacjeKey = findColumn(["adnotacje", "uwagi", "annotations", "komentarz"]);
+        const colNosnikKey = findColumn(["nr nośnika", "nośnik", "nosnik", "sscc", "paleta", "nr palety"]);
 
         const knownKeys = new Set([
           colLokalizacjaKey, colKodGlownyKey, colKodPomocniczyKey, colNazwaKey, 
           colSJKey, colSystemowaKey, colLicz1Key, colLicz2Key, colLicz3Key, 
-          colLpKey, colPartiaKey, colDataKey, colAdnotacjeKey
+          colLpKey, colPartiaKey, colDataKey, colAdnotacjeKey, colNosnikKey
         ].filter(Boolean));
 
         if (!colLokalizacjaKey || !colKodGlownyKey) {
@@ -199,6 +202,7 @@ export default function ExcelImportExport({ items, onImport, onResetToDemo, them
             partia: colPartiaKey ? String(row[colPartiaKey]).trim() : "",
             dataWaznosci: colDataKey ? String(row[colDataKey]).trim() : "",
             adnotacje: colAdnotacjeKey ? String(row[colAdnotacjeKey]).trim() : "",
+            nosnik: colNosnikKey ? String(row[colNosnikKey]).trim() : "",
             customFields: Object.keys(customFields).length > 0 ? customFields : undefined,
           };
         });
@@ -324,21 +328,80 @@ export default function ExcelImportExport({ items, onImport, onResetToDemo, them
   const cDragBtn = isLight ? "bg-white hover:bg-slate-100 text-slate-700 border border-slate-200 shadow-xs" : "bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700";
   const cBtnSec = isLight ? "bg-slate-100 text-slate-800 border border-slate-200 hover:bg-slate-200 shadow-xs" : "bg-slate-800 hover:bg-slate-700 border border-slate-755 text-slate-100";
   const cBtnMail = isLight ? "bg-emerald-600 hover:bg-emerald-505 text-white active:bg-emerald-700 shadow-xs" : "bg-emerald-500 hover:bg-emerald-400 text-slate-950";
-
   return (
     <div id="excel_panel_holder" className="flex flex-col gap-5">
       
       {/* Excel Operations box */}
-      <div className={`${cCard} rounded-3xl p-5 shadow-sm space-y-4 transition-colors duration-200`}>
+      <div className={`${cCard} rounded-3xl shadow-sm transition-colors duration-200 overflow-hidden`}>
         
-        <div className="flex items-center gap-2">
-          <FileSpreadsheet className={`h-5 w-5 ${isLight ? 'text-teal-600' : 'text-teal-400'}`} />
-          <h4 className={`font-bold ${cTextTitle} text-sm`}>Operacje Excel & Pliki</h4>
-        </div>
+        {!isPanelExpanded ? (
+          <div className="p-5 flex flex-col gap-5 bg-slate-50/50 dark:bg-slate-900/50">
+            <div className="flex items-center gap-2">
+              <Lock className={`h-5 w-5 ${isLight ? 'text-slate-400' : 'text-slate-500'}`} />
+              <h4 className={`font-bold ${cTextTitle} text-sm`}>Awaryjny panel plików lokalnych</h4>
+            </div>
+            
+            <div className={`relative w-full h-12 rounded-full overflow-hidden flex items-center px-1 border ${isLight ? 'bg-slate-200 border-slate-300' : 'bg-slate-800 border-slate-700'}`}>
+              <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                <span className={`text-[10px] font-bold uppercase tracking-wider ${isLight ? 'text-slate-500' : 'text-slate-400'}`}>
+                  Przesuń suwak w prawo aby odblokować
+                </span>
+              </div>
+              
+              <input 
+                type="range" 
+                min="0" 
+                max="100" 
+                value={sliderValue}
+                onChange={(e) => {
+                  const val = parseInt(e.target.value);
+                  setSliderValue(val);
+                  if (val > 95) {
+                    setIsPanelExpanded(true);
+                    setSliderValue(0);
+                    sounds.playSuccess();
+                  }
+                }}
+                onMouseUp={() => { if (sliderValue <= 95) setSliderValue(0); }}
+                onTouchEnd={() => { if (sliderValue <= 95) setSliderValue(0); }}
+                className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-20 m-0"
+              />
+              
+              <div 
+                className="absolute left-1 top-1 bottom-1 bg-teal-500 rounded-full pointer-events-none flex items-center justify-end pr-1 transition-all"
+                style={{ width: `max(2.5rem, calc(${sliderValue}% - 0.5rem))` }}
+              >
+                 <div className="h-8 w-8 bg-white rounded-full shadow-sm flex items-center justify-center shrink-0">
+                   <Unlock className="h-4 w-4 text-teal-600" />
+                 </div>
+              </div>
+            </div>
+          </div>
+        ) : (
+          <button
+            onClick={() => setIsPanelExpanded(false)}
+            className={`flex items-center justify-between w-full p-5 cursor-pointer transition-colors ${
+              isLight ? 'bg-slate-50 border-b border-slate-100 hover:bg-slate-100' : 'bg-slate-800/30 border-b border-slate-800 hover:bg-slate-800/60'
+            }`}
+          >
+            <div className="flex items-center gap-2">
+              <FileSpreadsheet className={`h-5 w-5 ${isLight ? 'text-teal-600' : 'text-teal-400'}`} />
+              <h4 className={`font-bold ${cTextTitle} text-sm`}>Awaryjny panel plików lokalnych</h4>
+            </div>
+            <div className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-rose-50 dark:bg-rose-500/10 border border-rose-200 dark:border-rose-500/30">
+              <Lock className="h-3.5 w-3.5 text-rose-500" />
+              <span className="text-[10px] font-bold text-rose-500 uppercase tracking-wider">
+                Zablokuj
+              </span>
+            </div>
+          </button>
+        )}
 
-        {/* Drag and drop module */}
-        <div
-          onDragEnter={handleDrag}
+        {isPanelExpanded && (
+          <div className="p-5 pt-4 space-y-4 animate-in slide-in-from-top-2 duration-200">
+            {/* Drag and drop module */}
+            <div
+              onDragEnter={handleDrag}
           onDragOver={handleDrag}
           onDragLeave={handleDrag}
           onDrop={handleDrop}
@@ -366,7 +429,7 @@ export default function ExcelImportExport({ items, onImport, onResetToDemo, them
         </div>
 
         {/* Action triggers */}
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 gap-3">
           
           <button
             id="download_excel_btn"
@@ -380,20 +443,6 @@ export default function ExcelImportExport({ items, onImport, onResetToDemo, them
           >
             <Download className={`h-4 w-4 ${(!items || items.length === 0) ? 'text-slate-400' : isLight ? 'text-teal-600 font-extrabold' : 'text-teal-400'}`} />
             Pełny Arkusz
-          </button>
-
-          <button
-            id="download_diff_btn"
-            onClick={handleExportDiff}
-            disabled={!items || items.length === 0}
-            className={`flex items-center justify-center gap-1.5 p-3.5 rounded-2xl text-xs font-bold transition-all ${
-              !items || items.length === 0 
-                ? 'opacity-50 cursor-not-allowed bg-slate-200 text-slate-500 dark:bg-slate-800 dark:text-slate-500' 
-                : `cursor-pointer bg-rose-500 hover:bg-rose-600 text-white shadow-xs`
-            }`}
-          >
-            <Download className="h-4 w-4 text-white" />
-            Raport Różnic
           </button>
 
         </div>
@@ -424,6 +473,8 @@ export default function ExcelImportExport({ items, onImport, onResetToDemo, them
           </div>
         </div>
 
+          </div>
+        )}
       </div>
 
       {/* Success alert of loaded excel data */}

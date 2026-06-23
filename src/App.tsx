@@ -9,6 +9,7 @@ import Login from './components/Login';
 import { auth, db } from './firebase';
 import { onAuthStateChanged, User } from 'firebase/auth';
 import { collection, query, where, getDocs } from 'firebase/firestore';
+import { sounds } from './utils/sound';
 
 export type AppUser = {
   uid: string;
@@ -58,6 +59,38 @@ export default function App() {
     });
 
     return () => unsubscribe();
+  }, []);
+
+  // Blokada przycisku "Wstecz" (Back Button) na urządzeniach mobilnych/skanerach
+  useEffect(() => {
+    // Push an initial dummy state to history
+    window.history.pushState(null, "", window.location.href);
+
+    const handlePopState = (event: PopStateEvent) => {
+      // When back is pressed, popstate is triggered. We immediately push a new state to trap the user.
+      window.history.pushState(null, "", window.location.href);
+      console.log("Zablokowano wyjście ze skanera przyciskiem 'Wstecz'");
+    };
+
+    window.addEventListener("popstate", handlePopState);
+    return () => {
+      window.removeEventListener("popstate", handlePopState);
+    };
+  }, []);
+
+  // Odblokowanie dźwięków w iOS/Android przy pierwszej interakcji
+  useEffect(() => {
+    const handleInteraction = () => {
+      sounds.unlockAudio();
+      document.removeEventListener('click', handleInteraction);
+      document.removeEventListener('touchstart', handleInteraction);
+    };
+    document.addEventListener('click', handleInteraction);
+    document.addEventListener('touchstart', handleInteraction);
+    return () => {
+      document.removeEventListener('click', handleInteraction);
+      document.removeEventListener('touchstart', handleInteraction);
+    };
   }, []);
 
   if (loading) {

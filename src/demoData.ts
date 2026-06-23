@@ -13,9 +13,16 @@ export const DEFAULT_CONFIG: InventoryConfig = {
   ignorowanePartie: "0;000;brak;-",
   pokazujInnaLok: true,
   pozwalajDodawac: true,
-  motyw: "dark",
+  motyw: "light",
   wibracje: true,
   dzwieki: true,
+  trybSkanowania: 'oba',
+  autoSyncAfterSave: true,
+  pokazujNosnikHint: true,
+  ukryjKlawiature: true,
+  wymuszajNosnik: false,
+  logikaLiczenia2: 'tylko_niezgodne',
+  logikaLiczenia3: 'tylko_niezgodne',
 };
 
 export const DEMO_INVENTORY: InventoryItem[] = [

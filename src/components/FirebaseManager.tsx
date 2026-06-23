@@ -11,11 +11,15 @@ interface FirebaseManagerProps {
   items: InventoryItem[];
   onImport: (items: InventoryItem[], round?: string, sheetName?: string) => void;
   isLight: boolean;
+  sheets?: any[];
+  workerName?: string;
 }
 
-export default function FirebaseManager({ items, onImport, isLight }: FirebaseManagerProps) {
+export default function FirebaseManager({ items, onImport, isLight, sheets, workerName }: FirebaseManagerProps) {
   const user = useContext(UserContext);
-  const [sheets, setSheets] = useState<any[]>([]);
+  const [localSheets, setLocalSheets] = useState<any[]>([]);
+  const [sheetsError, setSheetsError] = useState<string | null>(null);
+  const activeSheets = sheets || localSheets;
   const [activeSheetId, _setActiveSheetId] = useState<string | null>(localStorage.getItem('mobile_scanner_fb_sheet_id'));
 
   const setActiveSheetId = (newId: string | null) => {
@@ -107,23 +111,53 @@ export default function FirebaseManager({ items, onImport, isLight }: FirebaseMa
       // Debounced auto-save without depending on stale sheet list state
       timeout = setTimeout(() => {
         syncCurrentProgressToCloud(true).catch(e => console.error("Auto-sync failed:", e));
-      }, 5000);
+      }, 60000);
     }
     return () => { if (timeout) clearTimeout(timeout); };
-  }, [items]); // triggers 5 seconds after every change to items (each scan)
+  }, [items]); // triggers 60 seconds after every change to items (each scan)
 
   useEffect(() => {
-    const q = query(collection(db, 'sheets'));
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const loadedSheets = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      loadedSheets.sort((a: any, b: any) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-      setSheets(loadedSheets);
-    }, (error) => {
-      console.error("Error fetching sheets:", error);
-    });
+    if (!sheets) {
+      const q = query(collection(db, 'sheets'));
+      const unsubscribe = onSnapshot(q, (snapshot) => {
+        const loadedSheets = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        loadedSheets.sort((a: any, b: any) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+        setLocalSheets(loadedSheets);
+        setSheetsError(null);
+        
+        console.log("WORKER ONSNAPSHOT TRIGGERED. Fetched", loadedSheets.length, "sheets.");
+        loadedSheets.forEach((s: any) => console.log(`- ${s.name}: ${s.status}`));
+      }, (err) => {
+        console.error("Error fetching sheets:", err);
+        if (err.message?.includes('Quota exceeded') || err.message?.includes('resource-exhausted')) {
+          setSheetsError('Wyczerpano dzienny darmowy limit Firebase (Quota exceeded). Brak dostępu do bazy.');
+        } else {
+          setSheetsError('Błąd połączenia z bazą danych.');
+        }
+      });
+      return () => unsubscribe();
+    }
+  }, [sheets]);
 
-    return () => unsubscribe();
-  }, []);
+  // If the sheet we're working on was returned to the pool by an admin or another device,
+  // we need to clear our local activeSheetId so we're not stuck.
+  useEffect(() => {
+    if (activeSheetId && user?.uid) {
+      const activeSheetsList = sheets || localSheets;
+      const currentActiveSheet = activeSheetsList.find((s: any) => s.id === activeSheetId);
+      
+      if (currentActiveSheet) {
+        // If the sheet is no longer assigned to us (e.g. admin unassigned it or someone else took it)
+        if (currentActiveSheet.status === 'available' || (currentActiveSheet.assignedTo && currentActiveSheet.assignedTo !== user.uid)) {
+          console.log("Sheet was unassigned or reassigned remotely. Clearing local active state.");
+          setActiveSheetId(null);
+          localStorage.removeItem('mobile_scanner_fb_sheet_id');
+          localStorage.removeItem('mobile_scanner_sync_snapshot_v1');
+          showToast('Twój arkusz został zwolniony z blokady przez serwer/admina.', 'info');
+        }
+      }
+    }
+  }, [activeSheetId, user, sheets, localSheets]);
 
   const fileToBase64 = (file: File): Promise<string> => {
     return new Promise((resolve, reject) => {
@@ -167,7 +201,9 @@ export default function FirebaseManager({ items, onImport, isLight }: FirebaseMa
             createdBy: user?.uid,
             createdAt: new Date().toISOString(),
             hasChunks: hasChunks,
-            originalFileBase64: hasChunks ? null : base64File
+            originalFileBase64: hasChunks ? null : base64File,
+            totalItems: parsedItems.length,
+            countedItems: 0
           });
           
           if (hasChunks) {
@@ -182,17 +218,22 @@ export default function FirebaseManager({ items, onImport, isLight }: FirebaseMa
             await chunkBatch.commit();
           }
           
-          // Chunk array into batches of 450
-          const CHUNK_SIZE = 450;
-          for (let j = 0; j < parsedItems.length; j += CHUNK_SIZE) {
-            const chunk = parsedItems.slice(j, j + CHUNK_SIZE);
-            const batch = writeBatch(db);
-            chunk.forEach((item, index) => {
-              const itemRef = doc(collection(db, `sheets/${sheetRef.id}/items`), `item_${j + index}`);
-              batch.set(itemRef, item);
-            });
-            await batch.commit();
+          // Serialize parsedItems to JSON and chunk it to avoid individual document limits
+          const itemsJson = JSON.stringify(parsedItems);
+          const ITEMS_CHUNK_LEN = 800000;
+          const itemsChunksCount = Math.ceil(itemsJson.length / ITEMS_CHUNK_LEN);
+          
+          await updateDoc(sheetRef, {
+            itemsChunksCount: itemsChunksCount
+          });
+
+          const itemsChunkBatch = writeBatch(db);
+          for (let j = 0; j < itemsChunksCount; j++) {
+            const strChunk = itemsJson.substring(j * ITEMS_CHUNK_LEN, (j + 1) * ITEMS_CHUNK_LEN);
+            const chunkRef = doc(collection(db, `sheets/${sheetRef.id}/items_chunks`), `chunk_${j}`);
+            itemsChunkBatch.set(chunkRef, { data: strChunk, index: j });
           }
+          await itemsChunkBatch.commit();
           successCount++;
         } catch (e: any) {
           errorMsgs.push(`Błąd (${file.name}): ${e.message || e}`);
@@ -227,17 +268,11 @@ export default function FirebaseManager({ items, onImport, isLight }: FirebaseMa
          localStorage.removeItem('mobile_scanner_sync_snapshot_v1');
       }
       
-      const q = query(collection(db, `sheets/${sheetId}/items`));
-      const snap = await getDocs(q);
-      
-      const CHUNK_SIZE = 450;
-      for (let i = 0; i < snap.docs.length; i += CHUNK_SIZE) {
-        const chunk = snap.docs.slice(i, i + CHUNK_SIZE);
-        const batch = writeBatch(db);
-        chunk.forEach((docSnap) => {
-          batch.delete(docSnap.ref);
-        });
-        await batch.commit();
+      const itemsChunksSnap = await getDocs(query(collection(db, `sheets/${sheetId}/items_chunks`)));
+      if (!itemsChunksSnap.empty) {
+        const chunkBatch = writeBatch(db);
+        itemsChunksSnap.docs.forEach(docSnap => chunkBatch.delete(docSnap.ref));
+        await chunkBatch.commit();
       }
 
       const chunksSnap = await getDocs(query(collection(db, `sheets/${sheetId}/chunks`)));
@@ -256,14 +291,17 @@ export default function FirebaseManager({ items, onImport, isLight }: FirebaseMa
 
   const unassignSheet = async (sheetId: string) => {
     try {
+      console.log("STARTING unassignSheet for ID:", sheetId);
       setConfirmUnassignId(null);
       await updateDoc(doc(db, 'sheets', sheetId), {
         status: 'available',
         assignedTo: null,
         assignedEmail: null
       });
+      console.log("SUCCESSFULLY updated doc for ID:", sheetId);
       showToast('Arkusz został zwolniony i jest gotowy do ponownego przypisania.', 'info');
     } catch (e: any) {
+      console.error("FAILED unassignSheet:", e);
       showToast("Wystąpił błąd podczas odblokowywania: " + e.message, 'error');
     }
   };
@@ -299,12 +337,11 @@ export default function FirebaseManager({ items, onImport, isLight }: FirebaseMa
       const sheetDocSnap = await getDoc(sheetDocRef);
       const currentRound = sheetDocSnap.data()?.currentRound || '1';
 
-      const q = query(collection(db, `sheets/${sheetId}/items`));
-      const snap = await getDocs(q);
-      const docsWithId = snap.docs.map(doc => ({ id: doc.id, data: doc.data() as InventoryItem }));
-      // Sort robustly by the numeric part of "item_123"
-      docsWithId.sort((a,b) => parseInt(a.id.split('_')[1] || '0') - parseInt(b.id.split('_')[1] || '0'));
-      const loadedItems = docsWithId.map(d => d.data);
+      const chunksSnap = await getDocs(query(collection(db, `sheets/${sheetId}/items_chunks`)));
+      const chunks = chunksSnap.docs.map(d => d.data());
+      chunks.sort((a, b) => a.index - b.index);
+      const itemsJson = chunks.map(c => c.data).join('');
+      const loadedItems = JSON.parse(itemsJson || '[]');
       
       updateSyncSnapshot(loadedItems);
       onImport(loadedItems, currentRound, sheetDocSnap.data()?.name);
@@ -326,11 +363,11 @@ export default function FirebaseManager({ items, onImport, isLight }: FirebaseMa
       const sheetDocSnap = await getDoc(sheetDocRef);
       const currentRound = sheetDocSnap.data()?.currentRound || '1';
 
-      const q = query(collection(db, `sheets/${sheetId}/items`));
-      const snap = await getDocs(q);
-      const docsWithId = snap.docs.map(doc => ({ id: doc.id, data: doc.data() as InventoryItem }));
-      docsWithId.sort((a,b) => parseInt(a.id.split('_')[1] || '0') - parseInt(b.id.split('_')[1] || '0'));
-      const loadedItems = docsWithId.map(d => d.data);
+      const chunksSnap = await getDocs(query(collection(db, `sheets/${sheetId}/items_chunks`)));
+      const chunks = chunksSnap.docs.map(d => d.data());
+      chunks.sort((a, b) => a.index - b.index);
+      const itemsJson = chunks.map(c => c.data).join('');
+      const loadedItems = JSON.parse(itemsJson || '[]');
       
       onImport(loadedItems, currentRound, sheetDocSnap.data()?.name);
       setActiveSheetId(null);
@@ -348,11 +385,11 @@ export default function FirebaseManager({ items, onImport, isLight }: FirebaseMa
   const downloadProcessedSheet = async (sheet: any) => {
     try {
       setIsDownloadingId(sheet.id);
-      const q = query(collection(db, `sheets/${sheet.id}/items`));
-      const snap = await getDocs(q);
-      const docsWithId = snap.docs.map(doc => ({ id: doc.id, data: doc.data() as InventoryItem }));
-      docsWithId.sort((a,b) => parseInt(a.id.split('_')[1] || '0') - parseInt(b.id.split('_')[1] || '0'));
-      const loadedItems = docsWithId.map(d => d.data);
+      const chunksSnap = await getDocs(query(collection(db, `sheets/${sheet.id}/items_chunks`)));
+      const chunks = chunksSnap.docs.map(d => d.data());
+      chunks.sort((a, b) => a.index - b.index);
+      const itemsJson = chunks.map(c => c.data).join('');
+      const loadedItems = JSON.parse(itemsJson || '[]');
 
       const currentDateISO = new Date().toISOString().split('T')[0];
       const timeStamp = new Date().toTimeString().split(' ')[0].replace(/:/g, '');
@@ -415,40 +452,25 @@ export default function FirebaseManager({ items, onImport, isLight }: FirebaseMa
         });
 
       if (itemsToUpdate.length > 0) {
-        for (let i = 0; i < itemsToUpdate.length; i += CHUNK_SIZE) {
-          const chunk = itemsToUpdate.slice(i, i + CHUNK_SIZE);
-          const batch = writeBatch(db);
-          chunk.forEach(({ item, index }) => {
-            const itemRef = doc(collection(db, `sheets/${activeSheetId}/items`), `item_${index}`);
-            const updateData: any = {
-              licz1: item.licz1,
-              licz2: item.licz2,
-              licz3: item.licz3,
-              adnotacje: item.adnotacje,
-              osoba1: item.osoba1 || null,
-              osoba2: item.osoba2 || null,
-              osoba3: item.osoba3 || null
-            };
+        const itemsJson = JSON.stringify(targetItems);
+        const ITEMS_CHUNK_LEN = 800000;
+        const itemsChunksCount = Math.ceil(itemsJson.length / ITEMS_CHUNK_LEN);
 
-            if (item.isNew) {
-              updateData.isNew = true;
-              updateData.kodGlowny = item.kodGlowny || "";
-              updateData.kodPomocniczy = item.kodPomocniczy || "";
-              updateData.nazwa = item.nazwa || "";
-              updateData.lokalizacja = item.lokalizacja || "";
-              updateData.partia = item.partia || "";
-              updateData.dataWaznosci = item.dataWaznosci || "";
-              updateData.lp = item.lp || "";
-              updateData.iloscSystemowa = item.iloscSystemowa || 0;
-              updateData.sj = item.sj || "";
-              updateData.rowNum = item.rowNum;
-            }
+        const countedItems = targetItems.filter(i => i.licz1 !== null || i.licz2 !== null || i.licz3 !== null).length;
+        
+        await updateDoc(doc(db, 'sheets', activeSheetId), {
+          itemsChunksCount: itemsChunksCount,
+          countedItems: countedItems
+        });
 
-            batch.set(itemRef, updateData, { merge: true });
-            totalUpdated++;
-          });
-          await batch.commit();
+        const itemsChunkBatch = writeBatch(db);
+        for (let j = 0; j < itemsChunksCount; j++) {
+          const strChunk = itemsJson.substring(j * ITEMS_CHUNK_LEN, (j + 1) * ITEMS_CHUNK_LEN);
+          const chunkRef = doc(collection(db, `sheets/${activeSheetId}/items_chunks`), `chunk_${j}`);
+          itemsChunkBatch.set(chunkRef, { data: strChunk, index: j });
         }
+        await itemsChunkBatch.commit();
+        totalUpdated = itemsToUpdate.length;
         
         // Update snapshot after successful sync
         updateSyncSnapshot(targetItems);
@@ -518,7 +540,7 @@ export default function FirebaseManager({ items, onImport, isLight }: FirebaseMa
             const round = sheetDoc.data()?.currentRound || '1';
             
             currentItems = items.map(item => {
-               const workerEmail = user?.displayName || user?.email || 'Nieznany';
+               const workerEmail = user?.email || 'Nieznany';
                let updatedItem = { ...item };
                let filled = false;
                if (round === '1' && (item.licz1 === null || item.licz1 === undefined) && item.iloscSystemowa > 0) { updatedItem.licz1 = 0; updatedItem.osoba1 = workerEmail; filled = true; }
@@ -612,7 +634,8 @@ export default function FirebaseManager({ items, onImport, isLight }: FirebaseMa
         </p>
       </div>
 
-      <div className="mb-6 p-5 rounded-2xl bg-teal-500/10 border border-teal-500/20 text-center">
+      {user?.role === 'admin' && (
+        <div className="mb-6 p-5 rounded-2xl bg-teal-500/10 border border-teal-500/20 text-center">
         <p className="text-sm font-bold text-teal-400 mb-2">Dodaj nowy arkusz do chmury</p>
         <p className="text-xs text-slate-400 mb-4">Wybierz plik z telefonu lub komputera, a trafi on prosto do wspólnej chmury.</p>
         {uploadError && <div className="mb-4 text-xs font-bold bg-rose-500/10 text-rose-500 border border-rose-500/20 p-3 rounded-xl">{uploadError}</div>}
@@ -647,12 +670,21 @@ export default function FirebaseManager({ items, onImport, isLight }: FirebaseMa
           )}
         </button>
       </div>
+      )}
 
       <div>
-        <p className={`text-xs font-bold mb-3 uppercase tracking-wider ${isLight ? 'text-slate-500' : 'text-slate-400'}`}>Dostępne Arkusze:</p>
+        {sheetsError && (
+           <div className="mb-4 p-3 rounded-xl bg-rose-500/10 border border-rose-500/20 text-rose-500 text-xs font-bold text-center">
+             {sheetsError}
+           </div>
+        )}
+        <div className="flex justify-between items-center mb-6">
+          <h3 className={`text-sm font-bold uppercase tracking-wider ${isLight ? 'text-slate-800' : 'text-slate-200'}`}>Dostępne Arkusze:</h3>
+        </div>
+
         <div className="space-y-2 max-h-[350px] overflow-y-auto pr-1">
-          {sheets.filter(s => user?.role === 'admin' || s.status === 'available' || (s.status === 'in_progress' && s.assignedTo === user?.uid)).length === 0 && <p className="text-xs text-slate-500 py-4 text-center border border-dashed rounded-xl border-slate-800">Brak arkuszy w bazie. Administrator musi coś przesłać.</p>}
-          {sheets.filter(s => user?.role === 'admin' || s.status === 'available' || (s.status === 'in_progress' && s.assignedTo === user?.uid)).map(sheet => (
+          {activeSheets.length === 0 && <p className="text-xs text-slate-500 py-4 text-center border border-dashed rounded-xl border-slate-800">Brak arkuszy w bazie.</p>}
+          {activeSheets.map(sheet => (
             <div key={sheet.id} className={`p-4 rounded-xl border flex flex-col sm:flex-row items-center justify-between gap-3 ${
                 sheet.status === 'completed'
                     ? (isLight ? 'bg-slate-100 border-slate-200' : 'bg-slate-900 border-slate-800 opacity-50')
@@ -741,21 +773,12 @@ export default function FirebaseManager({ items, onImport, isLight }: FirebaseMa
                       {isDownloadingId === sheet.id ? 'Pobieranie...' : 'Pobierz Gotowy Plik'}
                     </button>
                     {(sheet.status === 'in_progress' || sheet.status === 'completed') && (
-                      confirmUnassignId === sheet.id ? (
                         <button 
                           onClick={() => unassignSheet(sheet.id)}
-                          className="px-3 py-2 rounded-lg bg-amber-700 hover:bg-amber-800 text-white text-[10px] font-bold cursor-pointer w-full sm:w-auto transition-colors"
-                        >
-                          Potwierdź cofnięcie do puli
-                        </button>
-                      ) : (
-                        <button 
-                          onClick={() => setConfirmUnassignId(sheet.id)}
                           className="px-3 py-2 rounded-lg bg-amber-500 hover:bg-amber-600 text-slate-900 text-xs font-bold cursor-pointer w-full sm:w-auto transition-colors"
                         >
                           Cofnij do puli
                         </button>
-                      )
                     )}
                     {sheet.status === 'completed' && (!sheet.currentRound || sheet.currentRound === '1' || sheet.currentRound === '2') && (
                         <button 

@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Scan, Sparkles, Keyboard, CheckCircle, X, Zap } from 'lucide-react';
+import { Scan, Sparkles, Keyboard, CheckCircle, Check, X, Zap } from 'lucide-react';
 import { InventoryItem } from '../types';
 import { useHardwareScanner } from '../hooks/useHardwareScanner';
 
@@ -12,6 +12,8 @@ interface ManualBarcodeEntryProps {
   onLaunchCamera: () => void;
   isLight?: boolean;
   showHints?: boolean;
+  ukryjKlawiature?: boolean;
+  sessionScannedItems?: Map<string, { qty: number }>;
 }
 
 export default function ManualBarcodeEntry({
@@ -23,6 +25,8 @@ export default function ManualBarcodeEntry({
   onLaunchCamera,
   isLight = false,
   showHints = false,
+  ukryjKlawiature = true,
+  sessionScannedItems = new Map(),
 }: ManualBarcodeEntryProps) {
   const [isManualModalOpen, setIsManualModalOpen] = useState(false);
   const [manualInputValue, setManualInputValue] = useState('');
@@ -40,14 +44,19 @@ export default function ManualBarcodeEntry({
     // Wyłączamy nasłuchiwanie w tle, jeśli modal ręcznego wpisywania jest otwarty
     isEnabled: isLocationSelected && !isManualModalOpen,
     timeout: 40,
+    inputMode: ukryjKlawiature ? 'none' : 'text',
   });
 
   // Focus w modalu
   useEffect(() => {
-    if (isManualModalOpen && manualInputRef.current) {
-      setTimeout(() => manualInputRef.current?.focus(), 50);
+    if (isManualModalOpen) {
+      setManualInputValue('');
+      // Usunięto autofocus: setTimeout(() => manualInputRef.current?.focus(), 50);
+      // dzięki temu klawiatura dotykowa nie wyskoczy automatycznie.
+    } else {
+      setTimeout(refocus, 100);
     }
-  }, [isManualModalOpen]);
+  }, [isManualModalOpen, refocus]);
 
   const handleManualSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -147,18 +156,45 @@ export default function ManualBarcodeEntry({
       >
         {isLocationSelected ? (
           <>
-            <div className="flex items-center gap-3 w-full mb-1">
-              <Zap className={`h-6 w-6 shrink-0 ${currentColor === 'white' ? 'animate-pulse text-teal-500' : 'text-slate-400'}`} />
+            <div className="flex items-center gap-3 w-full mb-1 relative">
+              <Zap className={`h-6 w-6 shrink-0 opacity-0`} /> {/* Invisible spacer or keep it as background */}
               <input
                 ref={phantomInputRef}
                 {...phantomInputProps}
                 placeholder="SKANUJ KOD TUTAJ..."
-                className={`w-full bg-transparent text-center font-black text-xl outline-none placeholder:font-bold ${
+                className={`w-full absolute left-0 right-0 bg-transparent text-center font-black text-xl outline-none placeholder:font-bold px-12 ${
                   isLight ? 'placeholder:text-slate-300 text-slate-800' : 'placeholder:text-slate-700 text-slate-100'
                 }`}
               />
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  if (phantomInputRef.current) {
+                    phantomInputRef.current.value = '';
+                    phantomInputRef.current.focus();
+                  }
+                }}
+                className={`absolute left-0 p-1.5 rounded-full transition-colors hover:bg-rose-500/20 text-rose-500 z-10`}
+              >
+                <X className="h-5 w-5" />
+              </button>
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  if (phantomInputRef.current && phantomInputRef.current.value.trim().length > 0) {
+                    onScan(phantomInputRef.current.value.trim());
+                    phantomInputRef.current.value = '';
+                    phantomInputRef.current.focus();
+                  }
+                }}
+                className={`absolute right-0 p-1.5 rounded-full bg-teal-500 hover:bg-teal-400 text-white shadow-sm transition-colors z-10`}
+              >
+                <Check className="h-5 w-5" />
+              </button>
             </div>
-            <span className="text-xs font-medium opacity-60 text-center">
+            <span className="text-[10px] font-medium opacity-60 text-center mb-1">
               Skieruj laser na etykietę. (Tapnij tu, jeśli nie reaguje)
             </span>
           </>
@@ -225,18 +261,32 @@ export default function ManualBarcodeEntry({
                     : 'bg-slate-950 border-slate-700 focus:border-teal-500 text-white'
                 }`}
               />
-              <button
-                type="submit"
-                disabled={!manualInputValue.trim()}
-                className={`w-full py-4 rounded-xl font-bold transition-all flex items-center justify-center gap-2 ${
-                  manualInputValue.trim()
-                    ? 'bg-teal-500 hover:bg-teal-400 text-slate-950 cursor-pointer shadow-md'
-                    : 'bg-slate-200 text-slate-400 cursor-not-allowed dark:bg-slate-800/50 dark:text-slate-600'
-                }`}
-              >
-                <CheckCircle className="w-5 h-5" />
-                Zatwierdź Kod
-              </button>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setManualInputValue('');
+                    manualInputRef.current?.focus();
+                  }}
+                  className={`py-2.5 px-4 rounded-xl font-bold text-sm transition-all cursor-pointer ${
+                    isLight ? 'bg-rose-100 hover:bg-rose-200 text-rose-700' : 'bg-rose-950 hover:bg-rose-900 text-rose-400'
+                  }`}
+                >
+                  Czyść
+                </button>
+                <button
+                  type="submit"
+                  disabled={!manualInputValue.trim()}
+                  className={`flex-1 py-2.5 rounded-xl font-bold text-sm transition-all flex items-center justify-center gap-2 ${
+                    manualInputValue.trim()
+                      ? 'bg-teal-500 hover:bg-teal-400 text-slate-950 cursor-pointer shadow-md'
+                      : 'bg-slate-200 text-slate-400 cursor-not-allowed dark:bg-slate-800/50 dark:text-slate-600'
+                  }`}
+                >
+                  <CheckCircle className="w-4 h-4 shrink-0" />
+                  Zatwierdź Kod
+                </button>
+              </div>
             </form>
 
             {/* HINTS FOR MANUAL ENTRY */}
@@ -251,7 +301,8 @@ export default function ManualBarcodeEntry({
                     </p>
                     <div className="flex flex-col gap-2 max-h-40 overflow-y-auto pr-1 custom-scrollbar">
                       {activeLocationItems.map((item, idx) => {
-                        const auxCode = item.kodPomocniczy || item.kodGlowny;
+                        const firstEan = (item.kodPomocniczy || '').split(/[,/;\s]+/)[0];
+                        const auxCode = firstEan || item.kodGlowny;
                         return (
                           <button
                             key={`unscanned-hint-${item.id}-${idx}`}
@@ -266,7 +317,26 @@ export default function ManualBarcodeEntry({
                                 : 'bg-slate-950 border-slate-800 hover:bg-slate-800 text-slate-300'
                             }`}
                           >
-                            <span className={`font-extrabold text-[10px] leading-none mb-1 truncate w-full ${isLight ? 'text-teal-700' : 'text-teal-400'}`}>{item.nazwa}</span>
+                            <div className="w-full flex justify-between items-start gap-2">
+                              <span className={`font-extrabold text-[10px] leading-none mb-1 truncate flex-1 ${isLight ? 'text-teal-700' : 'text-teal-400'}`}>{item.nazwa}</span>
+                              <div className="flex flex-col gap-1 items-end">
+                                {item.sj && item.sj !== "0" && item.sj !== "" && (
+                                  <span className="text-[9px] bg-rose-500/10 border border-rose-500/30 text-rose-650 dark:text-rose-450 px-1 rounded font-black shrink-0">
+                                    SJ: {item.sj}
+                                  </span>
+                                )}
+                                {(() => {
+                                  const codeKey = `${(item.kodGlowny || '').toUpperCase()}_row${item.rowNum}`;
+                                  const currentSessionQty = sessionScannedItems.get(codeKey)?.qty || 0;
+                                  const remaining = Math.max(0, item.iloscSystemowa - currentSessionQty);
+                                  return (
+                                    <span className="text-[9px] bg-amber-500/10 text-amber-600 dark:text-amber-400 px-1 rounded font-black shrink-0">
+                                      Pozostało: {remaining} szt.
+                                    </span>
+                                  );
+                                })()}
+                              </div>
+                            </div>
                             <span className={`font-mono text-[9px] ${isLight ? 'text-slate-600' : 'text-slate-400'}`}>Nr art.: {item.kodGlowny}</span>
                             {item.kodPomocniczy && <span className={`font-mono text-[9px] ${isLight ? 'text-slate-500' : 'text-slate-500'}`}>EAN: {item.kodPomocniczy}</span>}
                           </button>
@@ -284,7 +354,8 @@ export default function ManualBarcodeEntry({
                     </p>
                     <div className="flex flex-col gap-2 max-h-32 overflow-y-auto pr-1 custom-scrollbar opacity-70 hover:opacity-100 transition-opacity">
                       {scannedLocationItems.map((item, idx) => {
-                        const auxCode = item.kodPomocniczy || item.kodGlowny;
+                        const firstEan = (item.kodPomocniczy || '').split(/[,/;\s]+/)[0];
+                        const auxCode = firstEan || item.kodGlowny;
                         return (
                           <button
                             key={`scanned-hint-${item.id}-${idx}`}
@@ -299,9 +370,32 @@ export default function ManualBarcodeEntry({
                                 : 'bg-slate-950 border-slate-800 hover:bg-slate-800 text-slate-300'
                             }`}
                           >
-                            <span className={`font-extrabold text-[10px] leading-none mb-1 truncate w-full ${isLight ? 'text-teal-700' : 'text-teal-400'}`}>{item.nazwa}</span>
+                            <div className="w-full flex justify-between items-start gap-2">
+                              <span className={`font-extrabold text-[10px] leading-none mb-1 truncate flex-1 ${isLight ? 'text-teal-700' : 'text-teal-400'}`}>{item.nazwa}</span>
+                              <div className="flex flex-col gap-1 items-end">
+                                {item.sj && item.sj !== "0" && item.sj !== "" && (
+                                  <span className="text-[9px] bg-rose-500/10 border border-rose-500/30 text-rose-650 dark:text-rose-450 px-1 rounded font-black shrink-0">
+                                    SJ: {item.sj}
+                                  </span>
+                                )}
+                                {(() => {
+                                  const codeKey = `${(item.kodGlowny || '').toUpperCase()}_row${item.rowNum}`;
+                                  const currentSessionQty = sessionScannedItems.get(codeKey)?.qty || 0;
+                                  return (
+                                    <span className="text-[9px] bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 px-1 rounded font-black shrink-0">
+                                      Skanowano: {currentSessionQty} szt.
+                                    </span>
+                                  );
+                                })()}
+                              </div>
+                            </div>
                             <span className={`font-mono text-[9px] ${isLight ? 'text-slate-600' : 'text-slate-400'}`}>Nr art.: {item.kodGlowny}</span>
                             {item.kodPomocniczy && <span className={`font-mono text-[9px] ${isLight ? 'text-slate-500' : 'text-slate-500'}`}>EAN: {item.kodPomocniczy}</span>}
+                            {item.nosnik && (
+                              <span className={`font-mono text-[9px] mt-0.5 ${isLight ? 'text-indigo-600' : 'text-indigo-400'}`}>
+                                📦 Nośnik: {item.nosnik}
+                              </span>
+                            )}
                           </button>
                         );
                       })}
@@ -315,43 +409,7 @@ export default function ManualBarcodeEntry({
         </div>
       )}
 
-      {/* SIMULATOR ASSISTANT (Tylko pomocniczo) */}
-      {isLocationSelected && (
-        <div className={`border-t pt-4 mt-1 ${isLight ? 'border-slate-100' : 'border-slate-800/80'}`}>
-          <h5 className={`text-xs font-bold flex items-center gap-1.5 mb-2.5 ${isLight ? 'text-slate-500' : 'text-slate-400'}`}>
-            📟 Produkty do Skanera
-          </h5>
-          <div className="space-y-4">
-            {activeLocationItems.length > 0 ? (
-              <div className="flex flex-wrap gap-2">
-                {activeLocationItems.map((item, idx) => {
-                  const auxCode = item.kodPomocniczy || item.kodGlowny;
-                  return (
-                    <button
-                      key={`${item.id}-${idx}`}
-                      type="button"
-                      onClick={() => navigator.clipboard.writeText(auxCode)}
-                      className={`text-left px-3 py-2 rounded-xl text-xs border transition-all cursor-pointer flex flex-col max-w-[175px] ${
-                        isLight
-                          ? 'bg-slate-50 border-slate-200 hover:bg-slate-100 text-slate-800'
-                          : 'bg-slate-950 border-slate-800 hover:bg-slate-800 text-slate-300'
-                      }`}
-                    >
-                      <span className={`font-extrabold text-[10px] leading-none mb-1 truncate w-full ${isLight ? 'text-teal-700' : 'text-teal-400'}`}>{item.nazwa}</span>
-                      <span className={`font-mono text-[9px] ${isLight ? 'text-slate-600' : 'text-slate-400'}`}>Nr art.: {item.kodGlowny}</span>
-                      {item.kodPomocniczy && <span className={`font-mono text-[9px] ${isLight ? 'text-slate-500' : 'text-slate-500'}`}>EAN: {item.kodPomocniczy}</span>}
-                    </button>
-                  );
-                })}
-              </div>
-            ) : (
-              <p className={`text-xs font-bold ${isLight ? 'text-teal-700' : 'text-teal-400'}`}>
-                🎉 Wszystkie pozycje z listy dla tej strefy zostały zliczone!
-              </p>
-            )}
-          </div>
-        </div>
-      )}
+
 
     </div>
   );

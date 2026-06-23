@@ -4,6 +4,7 @@ interface UseHardwareScannerOptions {
   onScan: (barcode: string) => void;
   isEnabled?: boolean;
   timeout?: number;
+  inputMode?: 'none' | 'text' | 'tel' | 'url' | 'email' | 'numeric' | 'decimal' | 'search';
 }
 
 interface UseHardwareScannerReturn {
@@ -45,6 +46,7 @@ export function useHardwareScanner({
   onScan,
   isEnabled = true,
   timeout = 50,
+  inputMode = 'text',
 }: UseHardwareScannerOptions): UseHardwareScannerReturn {
   const buffer = useRef<string>('');
   const lastKeyTime = useRef<number>(0);
@@ -216,8 +218,10 @@ export function useHardwareScanner({
   }, [isEnabled]);
 
   const phantomInputProps: React.InputHTMLAttributes<HTMLInputElement> = {
-    // KLUCZOWE: "text" (nie "none"!) — "none" odcina dostarczanie HID keyboard events na Androidzie
-    inputMode: 'text',
+    // Przywrócono "text", aby skanery Zebra działały poprawnie (często "none" blokuje HID)
+    // Ale wprowadzono opcję z settings (ukryjKlawiature), która pozwala to obejść.
+    inputMode,
+    readOnly: false,
     autoComplete: 'off',
     autoCorrect: 'off',
     autoCapitalize: 'off',

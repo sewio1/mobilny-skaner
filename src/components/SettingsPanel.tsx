@@ -21,6 +21,7 @@ interface SettingsPanelProps {
   onSave: (updatedConfig: InventoryConfig, isGlobal: boolean) => void;
   onClose: () => void;
   isLight?: boolean;
+  inline?: boolean;
 }
 
 // ── Helper: collapsible section wrapper ─────────────────────────────────────
@@ -78,7 +79,7 @@ function ToggleRow({
 }
 
 // ── Main Component ────────────────────────────────────────────────────────────
-export default function SettingsPanel({ config, isAdmin, onSave, onClose, isLight = false }: SettingsPanelProps) {
+export default function SettingsPanel({ config, isAdmin, onSave, onClose, isLight = false, inline = false }: SettingsPanelProps) {
   // Scan
   const [skanZbiorczy, setSkanZbiorczy] = useState(config.skanZbiorczy);
   const [limitIlosci, setLimitIlosci] = useState(config.limitIlosci);
@@ -87,11 +88,19 @@ export default function SettingsPanel({ config, isAdmin, onSave, onClose, isLigh
   // Batch verification
   const [weryfikacjaPartii, setWeryfikacjaPartii] = useState(config.weryfikacjaPartii);
   const [ignorowanePartie, setIgnorowanePartie] = useState(config.ignorowanePartie);
+  const [blokadaDodawaniaPartii, setBlokadaDodawaniaPartii] = useState(config.blokadaDodawaniaPartii || false);
+
+  // Counting logic
+  const [logikaLiczenia2, setLogikaLiczenia2] = useState<'tylko_niezgodne' | 'wszystko'>(config.logikaLiczenia2 || 'tylko_niezgodne');
+  const [logikaLiczenia3, setLogikaLiczenia3] = useState<'tylko_niezgodne' | 'wszystko'>(config.logikaLiczenia3 || 'tylko_niezgodne');
 
   // Behaviour
   const [pokazujInnaLok, setPokazujInnaLok] = useState(config.pokazujInnaLok);
   const [pozwalajDodawac, setPozwalajDodawac] = useState(config.pozwalajDodawac);
   const [podpowiedziWpisywania, setPodpowiedziWpisywania] = useState(config.podpowiedziWpisywania || false);
+  const [autoSyncAfterSave, setAutoSyncAfterSave] = useState(config.autoSyncAfterSave || false);
+  const [pokazujNosnikHint, setPokazujNosnikHint] = useState(config.pokazujNosnikHint || false);
+  const [wymuszajNosnik, setWymuszajNosnik] = useState(config.wymuszajNosnik || false);
 
   // Notifications
   const [powiadomieniaTylkoArkusz, setPowiadomieniaTylkoArkusz] = useState(config.powiadomieniaTylkoArkusz || false);
@@ -100,6 +109,7 @@ export default function SettingsPanel({ config, isAdmin, onSave, onClose, isLigh
   const [motyw, setMotyw] = useState<'light' | 'dark'>(config.motyw || 'dark');
   const [wibracje, setWibracje] = useState(config.wibracje ?? true);
   const [dzwieki, setDzwieki] = useState(config.dzwieki ?? true);
+  const [ukryjKlawiature, setUkryjKlawiature] = useState(config.ukryjKlawiature ?? true);
 
   // Security
   const [pin, setPin] = useState(config.pin);
@@ -173,6 +183,8 @@ export default function SettingsPanel({ config, isAdmin, onSave, onClose, isLigh
       pin: pin.trim(), skanZbiorczy, weryfikacjaPartii, limitIlosci: Number(limitIlosci),
       ignorowanePartie, pokazujInnaLok, pozwalajDodawac, podpowiedziWpisywania,
       powiadomieniaTylkoArkusz, motyw, wibracje, dzwieki, trybSkanowania,
+      autoSyncAfterSave, pokazujNosnikHint, ukryjKlawiature, wymuszajNosnik, blokadaDodawaniaPartii,
+      logikaLiczenia2, logikaLiczenia3
     }, saveGlobally);
     sounds.playSuccess();
   };
@@ -184,8 +196,8 @@ export default function SettingsPanel({ config, isAdmin, onSave, onClose, isLigh
   ];
 
   return (
-    <div id="settings_panel_wrapper" className={`fixed inset-0 z-50 flex items-center justify-center p-4 transition-colors ${isLight ? 'bg-slate-900/30 backdrop-blur-sm' : 'bg-slate-950/80'}`}>
-      <div id="settings_panel_form" className={`w-full max-w-lg rounded-3xl border shadow-2xl overflow-hidden flex flex-col max-h-[92vh] transition-colors ${isLight ? 'bg-white border-slate-200' : 'bg-slate-900 border-slate-800'}`}>
+    <div id="settings_panel_wrapper" className={inline ? 'w-full h-full' : `fixed inset-0 z-50 flex items-center justify-center p-4 transition-colors ${isLight ? 'bg-slate-900/30 backdrop-blur-sm' : 'bg-slate-950/80'}`}>
+      <div id="settings_panel_form" className={`w-full ${inline ? 'max-w-4xl h-full mx-auto' : 'max-w-lg max-h-[92vh]'} rounded-3xl border shadow-2xl overflow-hidden flex flex-col transition-colors ${isLight ? 'bg-white border-slate-200' : 'bg-slate-900 border-slate-800'}`}>
 
         {/* Header */}
         <div className={`flex items-center justify-between border-b px-6 py-4 shrink-0 transition-colors ${isLight ? 'bg-white border-slate-200' : 'bg-slate-900 border-slate-800'}`}>
@@ -196,9 +208,11 @@ export default function SettingsPanel({ config, isAdmin, onSave, onClose, isLigh
               <p className={`text-[10px] ${isLight ? 'text-slate-500' : 'text-slate-500'}`}>Wszystkie parametry inwentaryzacji</p>
             </div>
           </div>
-          <button type="button" onClick={onClose} className={`rounded-full p-1.5 transition-colors cursor-pointer ${isLight ? 'text-slate-400 hover:bg-slate-100 hover:text-slate-700' : 'text-slate-400 hover:bg-slate-800 hover:text-slate-200'}`}>
-            <X className="h-5 w-5" />
-          </button>
+          {!inline && (
+            <button type="button" onClick={onClose} className={`rounded-full p-1.5 transition-colors cursor-pointer ${isLight ? 'text-slate-400 hover:bg-slate-100 hover:text-slate-700' : 'text-slate-400 hover:bg-slate-800 hover:text-slate-200'}`}>
+              <X className="h-5 w-5" />
+            </button>
+          )}
         </div>
 
         {/* Scrollable content */}
@@ -285,7 +299,18 @@ export default function SettingsPanel({ config, isAdmin, onSave, onClose, isLigh
               value={weryfikacjaPartii}
               onChange={() => setWeryfikacjaPartii(v => !v)}
             />
-            <div className="flex flex-col gap-1">
+            {weryfikacjaPartii && (
+              <div className={`mt-3 pt-3 border-t ${isLight ? 'border-slate-200' : 'border-slate-800/50'}`}>
+                <ToggleRow
+                  isLight={isLight}
+                  label="Blokada dodawania nowych Partii/Dat"
+                  desc="Jeśli włączone, pracownik nie będzie mógł wprowadzić różnicy dla zeskanowanego artykułu. Będzie musiał zatwierdzić stan systemowy."
+                  value={blokadaDodawaniaPartii}
+                  onChange={() => setBlokadaDodawaniaPartii(v => !v)}
+                />
+              </div>
+            )}
+            <div className="mt-3 flex flex-col gap-1">
               <label className={`text-[10px] font-medium ${isLight ? 'text-slate-600' : 'text-slate-400'}`}>Ignorowane oznaczenia partii (oddziel średnikiem)</label>
               <input
                 id="config_ignored_lots"
@@ -330,9 +355,94 @@ export default function SettingsPanel({ config, isAdmin, onSave, onClose, isLigh
               value={podpowiedziWpisywania}
               onChange={() => setPodpowiedziWpisywania(v => !v)}
             />
+            <ToggleRow
+              isLight={isLight}
+              label="Auto-Sync po zamknięciu strefy"
+              desc="Automatycznie wysyła wyniki do chmury po każdym zatwierdzeniu lokalizacji."
+              value={autoSyncAfterSave}
+              onChange={() => setAutoSyncAfterSave(v => !v)}
+            />
+            <ToggleRow
+              isLight={isLight}
+              label="Pokaż numer nośnika przy błędnym skanowaniu"
+              desc="Gdy artykuł jest w innym nośniku tej samej strefy, pokaże na jakim nośniku się znajduje."
+              value={pokazujNosnikHint}
+              onChange={() => setPokazujNosnikHint(v => !v)}
+            />
+            <ToggleRow
+              isLight={isLight}
+              label="Wymuś pracę na nośniku"
+              desc="Wymusza wybór nośnika zaraz po wejściu w lokalizację i blokuje skanowanie do momentu jego wyboru."
+              value={wymuszajNosnik}
+              onChange={() => setWymuszajNosnik(v => !v)}
+            />
+          </Section>
+          {/* ── 4. LOGIKA LICZENIA ─────────────────────────── */}
+          <Section
+            isLight={isLight}
+            icon={<Clipboard className="h-3.5 w-3.5" />}
+            title="Logika Kolejnych Tur Liczenia"
+            subtitle="Zasady wyświetlania asortymentu w drugim i trzecim liczeniu"
+            defaultOpen={true}
+          >
+            <div>
+              <p className={`text-xs font-semibold mb-2 ${isLight ? 'text-slate-700' : 'text-slate-300'}`}>Co liczymy w II turze (2 Liczenie)?</p>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => setLogikaLiczenia2('tylko_niezgodne')}
+                  className={`flex-1 py-2 px-3 rounded-xl text-[11px] font-bold border transition-all cursor-pointer leading-tight ${
+                    logikaLiczenia2 === 'tylko_niezgodne' 
+                      ? (isLight ? 'bg-teal-500 text-white border-teal-500' : 'bg-teal-500 text-slate-950 border-teal-400')
+                      : (isLight ? 'bg-white text-slate-600 border-slate-300' : 'bg-slate-900 text-slate-400 border-slate-800')
+                  }`}
+                >
+                  Tylko pozycje niezgodne z I turą
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setLogikaLiczenia2('wszystko')}
+                  className={`flex-1 py-2 px-3 rounded-xl text-[11px] font-bold border transition-all cursor-pointer leading-tight ${
+                    logikaLiczenia2 === 'wszystko' 
+                      ? (isLight ? 'bg-teal-500 text-white border-teal-500' : 'bg-teal-500 text-slate-950 border-teal-400')
+                      : (isLight ? 'bg-white text-slate-600 border-slate-300' : 'bg-slate-900 text-slate-400 border-slate-800')
+                  }`}
+                >
+                  Wszystkie pozycje ze strefy (od nowa)
+                </button>
+              </div>
+            </div>
+
+            <div className="pt-2">
+              <p className={`text-xs font-semibold mb-2 ${isLight ? 'text-slate-700' : 'text-slate-300'}`}>Co liczymy w III turze (3 Liczenie)?</p>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => setLogikaLiczenia3('tylko_niezgodne')}
+                  className={`flex-1 py-2 px-3 rounded-xl text-[11px] font-bold border transition-all cursor-pointer leading-tight ${
+                    logikaLiczenia3 === 'tylko_niezgodne' 
+                      ? (isLight ? 'bg-teal-500 text-white border-teal-500' : 'bg-teal-500 text-slate-950 border-teal-400')
+                      : (isLight ? 'bg-white text-slate-600 border-slate-300' : 'bg-slate-900 text-slate-400 border-slate-800')
+                  }`}
+                >
+                  Tylko pozycje nadal niezgodne
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setLogikaLiczenia3('wszystko')}
+                  className={`flex-1 py-2 px-3 rounded-xl text-[11px] font-bold border transition-all cursor-pointer leading-tight ${
+                    logikaLiczenia3 === 'wszystko' 
+                      ? (isLight ? 'bg-teal-500 text-white border-teal-500' : 'bg-teal-500 text-slate-950 border-teal-400')
+                      : (isLight ? 'bg-white text-slate-600 border-slate-300' : 'bg-slate-900 text-slate-400 border-slate-800')
+                  }`}
+                >
+                  Wszystkie pozycje ze strefy (od nowa)
+                </button>
+              </div>
+            </div>
           </Section>
 
-          {/* ── 4. POWIADOMIENIA ─────────────────────────── */}
+          {/* ── 5. POWIADOMIENIA ─────────────────────────── */}
           <Section
             isLight={isLight}
             icon={<Bell className="h-3.5 w-3.5" />}
@@ -417,6 +527,13 @@ export default function SettingsPanel({ config, isAdmin, onSave, onClose, isLigh
                   : <ToggleLeft className={`h-7 w-7 ${isLight ? 'text-slate-300' : 'text-slate-600'}`} />}
               </button>
             </div>
+            <ToggleRow
+              isLight={isLight}
+              label="Ukryj klawiaturę ekranową"
+              desc="Zapobiega wysuwaniu się klawiatury dotykowej przy skanowaniu. Wyłącz, jeśli chcesz wpisywać dane ręcznie palcem na ekranie."
+              value={ukryjKlawiature}
+              onChange={() => setUkryjKlawiature(!ukryjKlawiature)}
+            />
           </Section>
 
           {/* ── 6. BEZPIECZEŃSTWO ────────────────────────── */}
@@ -553,12 +670,14 @@ export default function SettingsPanel({ config, isAdmin, onSave, onClose, isLigh
             </label>
           )}
           <div className="flex justify-end gap-3">
-            <button type="button" onClick={onClose}
-              className={`px-5 py-2.5 rounded-xl border text-xs font-bold transition-colors cursor-pointer ${
-                isLight ? 'border-slate-300 text-slate-600 hover:bg-slate-100' : 'border-slate-700 text-slate-300 hover:bg-slate-800'
-              }`}>
-              Anuluj
-            </button>
+            {!inline && (
+              <button type="button" onClick={onClose}
+                className={`px-5 py-2.5 rounded-xl border text-xs font-bold transition-colors cursor-pointer ${
+                  isLight ? 'border-slate-300 text-slate-600 hover:bg-slate-100' : 'border-slate-700 text-slate-300 hover:bg-slate-800'
+                }`}>
+                Anuluj
+              </button>
+            )}
             <button type="button" onClick={handleSave}
               className="flex items-center gap-1.5 px-6 py-2.5 rounded-xl bg-teal-500 hover:bg-teal-400 text-white text-xs font-bold transition-colors cursor-pointer">
               <Save className="h-4 w-4" />

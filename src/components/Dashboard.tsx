@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { useState, useEffect, useContext } from 'react';
+import { useState, useEffect, useContext, useRef } from 'react';
 import { 
   Warehouse, Play, Search, RotateCcw, AlertTriangle, 
   CheckSquare, Check, X, Shield, RefreshCw, KeyRound, ArrowRight,
@@ -137,6 +137,8 @@ export default function Dashboard() {
 
   // --- COMPONENT ACTIVE STATES ---
   const [activeLocation, setActiveLocation] = useState<string>('');
+  const [lockedCarrier, setLockedCarrier] = useState<string>(''); // Zablokowany nośnik
+  const [isCarriersExpanded, setIsCarriersExpanded] = useState<boolean>(false);
   const [isLocationLocked, setIsLocationLocked] = useState<boolean>(false);
   const [countRound, setCountRound] = useState<CountRound>('1');
 
@@ -209,6 +211,88 @@ export default function Dashboard() {
     message: string;
     title?: string;
   } | null>(null);
+
+  const [toast, setToast] = useState<{ msg: string; type: 'success' | 'error' } | null>(null);
+  const toastTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  const showToastMessage = (msg: string, type: 'success' | 'error' = 'success') => {
+    if (toastTimeoutRef.current) clearTimeout(toastTimeoutRef.current);
+    setToast({ msg, type });
+    toastTimeoutRef.current = setTimeout(() => setToast(null), 3500);
+  };
+
+  const getCarrier = (item: InventoryItem) => {
+    return item.nosnik || item.customFields?.['nośnik'] || item.customFields?.['nosnik'] || '';
+  };
+
+  const copyToClipboard = (text: string, title = 'Skopiowano!') => {
+    if (!text) return;
+    if (navigator.clipboard && window.isSecureContext) {
+      navigator.clipboard.writeText(text)
+        .then(() => showToastMessage(`${title} ${text}`, 'success'))
+        .catch(() => fallbackCopyTextToClipboard(text, title));
+    } else {
+      fallbackCopyTextToClipboard(text, title);
+    }
+  };
+
+  const fallbackCopyTextToClipboard = (text: string, title: string) => {
+    const textArea = document.createElement("textarea");
+    textArea.value = text;
+    textArea.style.top = "0";
+    textArea.style.left = "0";
+    textArea.style.position = "fixed";
+    textArea.style.opacity = "0";
+    document.body.appendChild(textArea);
+    textArea.focus();
+    textArea.select();
+    try {
+      document.execCommand('copy');
+      showToastMessage(`${title} ${text}`, 'success');
+    } catch (err) {
+      showToastMessage("Kopiowanie nie powiodło się na tym urządzeniu", 'error');
+    }
+    document.body.removeChild(textArea);
+  };
+
+  // Helper for matching EANs which can be separated by commas, spaces, slashes etc.
+  const matchAuxBarcode = (item: InventoryItem, barcode: string) => {
+    if (!item.kodPomocniczy) return false;
+    const eans = item.kodPomocniczy.toUpperCase().split(/[,/;\s]+/).filter(Boolean);
+    return eans.includes(barcode.toUpperCase());
+  };
+
+  // Funkcja określająca, czy dany wiersz powinien być widoczny i liczony w danej turze
+  const isItemVisibleForCurrentRound = (i: InventoryItem) => {
+    if ((i.lokalizacja || '').toUpperCase() !== activeLocation) return false;
+    
+    // Jeśli użytkownik wybrał nośnik w strefie, ukrywamy resztę
+    if (lockedCarrier) {
+      if (getCarrier(i).toUpperCase() !== lockedCarrier) return false;
+    }
+    
+    if (countRound === '2') {
+      if (config.logikaLiczenia2 !== 'wszystko') {
+        // Tylko niezgodne z I tury
+        if (i.licz1 !== null && i.licz1 === i.iloscSystemowa) return false;
+        if (i.licz1 === null && i.iloscSystemowa === 0) return false;
+      }
+    }
+    
+    if (countRound === '3') {
+      if (config.logikaLiczenia3 !== 'wszystko') {
+        // Ukryj, jeśli było zgodne już w I turze
+        if (i.licz1 !== null && i.licz1 === i.iloscSystemowa) return false;
+        if (i.licz1 === null && i.iloscSystemowa === 0) return false;
+        
+        // Ukryj, jeśli było zgodne w II turze
+        if (i.licz2 !== null && i.licz2 === i.iloscSystemowa) return false;
+        if (i.licz2 === null && i.iloscSystemowa === 0) return false;
+      }
+    }
+    
+    return true;
+  };
 
   // --- INITIALIZE LISTS UPON SELECTING LOCATION ---
   const loadLocation = (loc: string) => {
@@ -293,6 +377,8 @@ export default function Dashboard() {
     }
     setActiveLocation('');
     setIsLocationLocked(false);
+    setLockedCarrier('');
+    setIsCarriersExpanded(false);
     setSessionExpectedCodes([]);
     setSessionScannedItems(new Map());
     setScanColor('white');
@@ -434,7 +520,7 @@ export default function Dashboard() {
     const scanMode = config.trybSkanowania || 'oba';
     const matchedItems = locationItems.filter(item => {
       const matchPrimary = (item.kodGlowny || '').toUpperCase() === barcode;
-      const matchAux = (item.kodPomocniczy || '').toUpperCase() === barcode;
+      const matchAux = matchAuxBarcode(item, barcode);
       if (scanMode === 'ean') return matchAux;
       if (scanMode === 'kodGlowny') return matchPrimary;
       return matchPrimary || matchAux; // 'oba' — domyślnie
@@ -506,7 +592,7 @@ export default function Dashboard() {
     setScanColor('red');
 
     // Check if item belongs to any other warehouse location (VBA: ZnajdzPoprawnaLokalizacje)
-    const foundElsewhere = items.find(i => (i.kodGlowny || '').toUpperCase() === barcode || (i.kodPomocniczy || '').toUpperCase() === barcode);
+    const foundElsewhere = items.find(i => (i.kodGlowny || '').toUpperCase() === barcode || matchAuxBarcode(i, barcode));
     const correctLoc = foundElsewhere ? foundElsewhere.lokalizacja : undefined;
 
     setAddUnknownQuery({
@@ -685,7 +771,7 @@ export default function Dashboard() {
     }
 
     // 1. Search for item model in generic inventory database
-    const modelItem = items.find(i => (i.kodGlowny || '').toUpperCase() === addUnknownQuery.barcode || (i.kodPomocniczy || '').toUpperCase() === addUnknownQuery.barcode);
+    const modelItem = items.find(i => (i.kodGlowny || '').toUpperCase() === addUnknownQuery.barcode || matchAuxBarcode(i, addUnknownQuery.barcode));
     
     const newRowIndex = items.length > 0 ? Math.max(...items.map(i => i.rowNum)) + 1 : 1;
     const finalRecord: InventoryItem = {
@@ -1084,7 +1170,21 @@ export default function Dashboard() {
               <div className="flex items-center gap-2.5">
                 <div className={`h-2.5 w-2.5 rounded-full ${isLight ? 'bg-teal-500' : 'bg-teal-400'} animate-ping shrink-0`} />
                 <div>
-                  <h3 className={`font-bold ${cTextTitle} text-sm leading-none`}>Strefa: {activeLocation}</h3>
+                  <h3 className={`font-bold ${cTextTitle} text-sm leading-none flex flex-wrap items-center gap-2`}>
+                    Strefa: {activeLocation}
+                    {lockedCarrier && (
+                      <span className="flex items-center gap-1 bg-indigo-500 text-white px-2 py-0.5 rounded-lg text-xs tracking-wider">
+                        📦 {lockedCarrier}
+                        <button
+                          onClick={(e) => { e.stopPropagation(); setLockedCarrier(''); }}
+                          className="ml-1 opacity-70 hover:opacity-100 rounded-full hover:bg-white/20 p-0.5 transition-colors"
+                          title="Odblokuj nośnik (wróć do całej strefy)"
+                        >
+                          <X className="h-3 w-3" />
+                        </button>
+                      </span>
+                    )}
+                  </h3>
                   <p className={`text-[10px] ${cTextMuted} mt-1 font-mono`}>Tura spisu: {countRound} Liczenie</p>
                 </div>
               </div>
@@ -1112,30 +1212,110 @@ export default function Dashboard() {
                 Zatwierdź i Zapisz Wyniki Strefy
               </button>
             </div>
+
+            {/* NOŚNIKI W STREFIE PANEL */}
+            {(() => {
+              const locationItems = items.filter(i => (i.lokalizacja || '').toUpperCase() === activeLocation);
+              const uniqueCarriers = Array.from(new Set(locationItems.map(getCarrier).filter(Boolean)));
+              
+              if (!lockedCarrier && uniqueCarriers.length > 0) {
+                return (
+                  <div className={`pt-3 border-t ${isLight ? 'border-teal-100' : 'border-teal-900/50'}`}>
+                    <button
+                      onClick={() => setIsCarriersExpanded(!isCarriersExpanded)}
+                      className={`flex items-center justify-between w-full p-4 rounded-xl transition-colors border ${isLight ? 'bg-teal-50 hover:bg-teal-100 border-teal-200 text-teal-800' : 'bg-teal-900/30 hover:bg-teal-900/50 border-teal-800/50 text-teal-300'}`}
+                    >
+                      <p className="text-xs sm:text-sm uppercase tracking-widest font-black flex items-center gap-2">
+                        <span className="text-lg">📦</span> NOŚNIKI W TEJ STREFIE ({uniqueCarriers.length})
+                      </p>
+                      <span className="text-xs font-bold opacity-80">{isCarriersExpanded ? 'UKRYJ ▲' : 'POKAŻ ▼'}</span>
+                    </button>
+
+                    {isCarriersExpanded && (
+                      <div className="mt-2 animate-in slide-in-from-top-2 duration-200">
+                        <div className="flex flex-wrap gap-2.5 mb-3">
+                          {uniqueCarriers.map(carrier => (
+                            <button
+                              key={carrier}
+                              onClick={() => setLockedCarrier(carrier)}
+                              className={`flex items-center gap-2 text-sm font-extrabold px-4 py-3 rounded-2xl border-2 transition-all cursor-pointer shadow-sm ${lockedCarrier === carrier.toUpperCase() ? 'bg-indigo-500 text-white border-indigo-400 scale-105 shadow-indigo-500/30 shadow-lg' : isLight ? 'bg-indigo-50 border-indigo-200 text-indigo-800 hover:bg-indigo-100 hover:border-indigo-400' : 'bg-indigo-900/40 border-indigo-500/50 text-indigo-300 hover:bg-indigo-800/60 hover:border-indigo-400'}`}
+                            >
+                              <span className="text-base">📦</span>{carrier}
+                            </button>
+                          ))}
+                        </div>
+                        
+                        <div className="relative mt-2">
+                          <input
+                            type="text"
+                            placeholder="LUB ZESKANUJ NR NOŚNIKA..."
+                            autoFocus
+                            inputMode={config.ukryjKlawiature ? 'none' : 'text'}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') {
+                                const val = (e.target as HTMLInputElement).value.trim().toUpperCase();
+                                if (val) {
+                                  if (uniqueCarriers.map(c => c.toUpperCase()).includes(val)) {
+                                    setLockedCarrier(val);
+                                  } else {
+                                    sounds.playError();
+                                    setAlertDialog({ message: `Nośnik "${val}" nie należy do tej strefy. Wybierz poprawny z listy.` });
+                                  }
+                                }
+                                (e.target as HTMLInputElement).value = '';
+                              }
+                            }}
+                            className={`w-full rounded-xl ${cInput} p-2.5 text-xs tracking-wider placeholder:font-normal uppercase focus:outline-none focus:border-indigo-450 transition-colors duration-200`}
+                          />
+                          <div className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 shrink-0">
+                            <Search className="h-4 w-4" />
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              }
+              return null;
+            })()}
+
           </div>
         ) : null}
 
-        {/* STEP 2: ACTIVE SCANNING BOARD */}
+        {/* HUD CONTENT */}
         {isLocationLocked && (
           <>
-            <ManualBarcodeEntry 
+            {(() => {
+              const locationItems = items.filter(i => (i.lokalizacja || '').toUpperCase() === activeLocation);
+              const uniqueCarriers = Array.from(new Set(locationItems.map(getCarrier).filter(Boolean)));
+              const isCarrierRequiredButMissing = config.wymuszajNosnik && !lockedCarrier && uniqueCarriers.length > 0;
+
+              if (isCarrierRequiredButMissing) {
+                return (
+                  <div className={`p-8 rounded-3xl border text-center shadow-sm ${isLight ? 'bg-amber-50 border-amber-200 text-amber-800' : 'bg-amber-500/10 border-amber-500/20 text-amber-400'}`}>
+                    <AlertTriangle className="h-10 w-10 mx-auto mb-3 opacity-80 animate-pulse" />
+                    <h3 className="text-lg font-black mb-2 uppercase tracking-wide">WYMAGANY WYBÓR NOŚNIKA</h3>
+                    <p className="text-sm font-medium opacity-80 max-w-sm mx-auto">Włączono opcję przymusowej pracy na nośniku. Rozwiń pasek nośników u góry i wybierz odpowiedni, aby odblokować skaner.</p>
+                  </div>
+                );
+              }
+
+              return (
+                <>
+                  <ManualBarcodeEntry 
               onScan={handleBarcodeScanned}
               currentColor={scanColor}
               isLocationSelected={isLocationLocked}
               onLaunchCamera={() => setIsCameraOpen(true)}
               activeLocationItems={items.filter(i => {
-                if ((i.lokalizacja || '').toUpperCase() !== activeLocation) return false;
-                if (countRound === '2' && (i.licz1 === null || i.licz1 === i.iloscSystemowa)) return false;
-                if (countRound === '3' && (i.licz2 === null || i.licz2 === i.iloscSystemowa)) return false;
+                if (!isItemVisibleForCurrentRound(i)) return false;
                 const codeKey = `${(i.kodGlowny || '').toUpperCase()}_row${i.rowNum}`;
                 const currentSessionQty = sessionScannedItems.get(codeKey)?.qty || 0;
                 const remaining = i.iloscSystemowa - currentSessionQty;
                 return remaining > 0;
               })}
               scannedLocationItems={items.filter(i => {
-                if ((i.lokalizacja || '').toUpperCase() !== activeLocation) return false;
-                if (countRound === '2' && (i.licz1 === null || i.licz1 === i.iloscSystemowa)) return false;
-                if (countRound === '3' && (i.licz2 === null || i.licz2 === i.iloscSystemowa)) return false;
+                if (!isItemVisibleForCurrentRound(i)) return false;
                 const codeKey = `${(i.kodGlowny || '').toUpperCase()}_row${i.rowNum}`;
                 const currentSessionQty = sessionScannedItems.get(codeKey)?.qty || 0;
                 const remaining = i.iloscSystemowa - currentSessionQty;
@@ -1186,9 +1366,7 @@ export default function Dashboard() {
                 <div className="space-y-2 max-h-[300px] overflow-y-auto pr-1">
                   {(() => {
                     const todoItems = items.filter(i => {
-                      if ((i.lokalizacja || '').toUpperCase() !== activeLocation) return false;
-                      if (countRound === '2' && (i.licz1 === null || i.licz1 === i.iloscSystemowa)) return false;
-                      if (countRound === '3' && (i.licz2 === null || i.licz2 === i.iloscSystemowa)) return false;
+                      if (!isItemVisibleForCurrentRound(i)) return false;
                       const codeKey = `${(i.kodGlowny || '').toUpperCase()}_row${i.rowNum}`;
                       const currentSessionQty = sessionScannedItems.get(codeKey)?.qty || 0;
                       return Math.max(0, i.iloscSystemowa - currentSessionQty) > 0;
@@ -1224,8 +1402,9 @@ export default function Dashboard() {
                               )}
                               {item.nazwa}
                             </h5>
-                            <p className="text-[10px] text-slate-500 font-mono mt-1">
-                              Nr art.: {item.kodGlowny} | EAN: {item.kodPomocniczy || "brak"}
+                            <p className={`text-[10px] sm:text-xs ${isLight ? 'text-slate-500' : 'text-slate-500'}`}>
+                              Nr art.: <span onClick={(e) => { e.stopPropagation(); copyToClipboard(item.kodGlowny); }} className="cursor-pointer hover:text-teal-500 underline decoration-dashed underline-offset-2">{item.kodGlowny}</span> | 
+                              EAN: <span onClick={(e) => { e.stopPropagation(); copyToClipboard(item.kodPomocniczy || ''); }} className="cursor-pointer hover:text-teal-500 underline decoration-dashed underline-offset-2">{item.kodPomocniczy || "brak"}</span>
                             </p>
                             {item.partia && (
                               <p className={`text-[9px] ${isLight ? 'text-teal-700' : 'text-teal-400'} font-mono mt-0.5`}>
@@ -1293,8 +1472,9 @@ export default function Dashboard() {
                                 )}
                                 {originItem ? originItem.nazwa : `Nieznany Nr art. (${key.split('_')[0]})`}
                               </h5>
-                              <p className="text-[10px] text-slate-500 mt-0.5 font-mono">
-                                Nr art.: {originItem?.kodGlowny || key.split('_')[0]} | EAN: {originItem?.kodPomocniczy || 'brak'}
+                              <p className={`text-[10px] ${cTextMuted} truncate mt-1`}>
+                                Nr art.: <span onClick={(e) => { e.stopPropagation(); copyToClipboard(originItem?.kodGlowny || key.split('_')[0]); }} className="cursor-pointer hover:text-teal-500 underline decoration-dashed underline-offset-2">{originItem?.kodGlowny || key.split('_')[0]}</span> | 
+                                EAN: <span onClick={(e) => { e.stopPropagation(); copyToClipboard(originItem?.kodPomocniczy || ''); }} className="cursor-pointer hover:text-teal-500 underline decoration-dashed underline-offset-2">{originItem?.kodPomocniczy || 'brak'}</span>
                               </p>
                               <p className="text-[10px] text-slate-500 mt-0.5 font-mono">
                                 Partia: {val.batch || 'brak'} / Ważn: {val.expiry || 'brak'}
@@ -1395,8 +1575,11 @@ export default function Dashboard() {
                 </div>
               </div>
             )}
-          </>
-        )}
+            </>
+          );
+        })()}
+      </>
+    )}
 
         {/* DATA MANAGER LAUNCHER - Only if already loaded */}
         {!isLocationLocked && items.length > 0 && (
@@ -1423,6 +1606,16 @@ export default function Dashboard() {
       </main>
 
       {/* --- FLOATING OVERLAY MODALS --- */}
+
+      {/* Toast Notification */}
+      {toast && (
+        <div className={`fixed bottom-8 left-1/2 -translate-x-1/2 z-[100] px-5 py-3.5 rounded-full shadow-2xl flex items-center gap-3 animate-in fade-in slide-in-from-bottom-6 ${
+          toast.type === 'success' ? 'bg-emerald-600 text-white shadow-emerald-600/30' : 'bg-rose-600 text-white shadow-rose-600/30'
+        }`}>
+          {toast.type === 'success' ? <Check className="h-4 w-4" /> : <AlertTriangle className="h-4 w-4" />}
+          <span className="text-sm font-extrabold whitespace-nowrap">{toast.msg}</span>
+        </div>
+      )}
 
       {/* Z. Data Management Modal */}
       {isDataManagerOpen && (
